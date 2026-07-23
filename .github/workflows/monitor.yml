@@ -4,7 +4,12 @@ on:
   schedule:
     # 每 15 分鐘執行一次（GitHub 的排程時間不保證分秒不差，可能會有幾分鐘誤差，屬正常現象）
     - cron: "*/15 * * * *"
-  workflow_dispatch: {}   # 讓你可以在 GitHub 網頁上手動點一次「Run workflow」來測試
+  workflow_dispatch:
+    inputs:
+      test_notification:
+        description: "勾選後只發送測試通知，不檢查商品頁面（用來驗證 Discord/Telegram/Gmail 有沒有設定成功）"
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # 需要這個權限才能把 state.json 的最新狀態寫回倉庫
@@ -24,7 +29,7 @@ jobs:
       - name: 安裝套件
         run: pip install -r requirements.txt
 
-      - name: 執行一次檢查
+      - name: 執行一次檢查（或測試通知）
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -32,7 +37,12 @@ jobs:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           GMAIL_TO: ${{ secrets.GMAIL_TO }}
-        run: python weverse_monitor.py --once
+        run: |
+          if [ "${{ inputs.test_notification }}" = "true" ]; then
+            python weverse_monitor.py --test
+          else
+            python weverse_monitor.py --once
+          fi
 
       - name: 把最新狀態寫回倉庫（避免重複通知）
         run: |
