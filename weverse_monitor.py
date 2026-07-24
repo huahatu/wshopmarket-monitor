@@ -73,17 +73,6 @@ MONITORED_PAGES = [
             "HHM NYA RING",
         ],
     },
-    {
-        "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/61334",
-        "label": "商品頁 61334",
-        "products": [
-            "CHOI YONG MEONG",
-            "HWANG CHOON",
-            "BAMGEUT",
-            "DA-GO-NYANG",
-            "HHM NYA RING",
-        ],
-    },
 ]
 
 CHECK_INTERVAL_SECONDS = 15 * 60  # 15 分鐘
@@ -155,17 +144,78 @@ def check_availability(html: str, product_names) -> dict:
     回傳格式： {"CHOI YONG MEONG": True/False, ...}
     True 代表判斷為「可購買」，False 代表「不可購買 / 找不到 / 售完」
 
-    判斷方式（主要邏輯）：Weverse Shop 的商品款式選擇是一排 <button> 按鈕，
-    賣完的款式會有 HTML 的 disabled 屬性（<button disabled>...），可以購買的
-    款式則沒有這個屬性。直接讀取按鈕的 disabled 屬性，比用文字關鍵字猜測
-    （SOLD OUT / ADD TO CART）準確非常多，不會有「猜到隔壁商品」的問題。
+    判斷方式（依可靠度由高到低，逐層備援）：
+    1. 【最可靠】解析網頁裡的 __NEXT_DATA__ JSON 區塊，這是 Weverse 網站自己內部
+       使用的資料，裡面每個款式都直接寫著 isSoldOut: true/false，不需要用任何
+       文字或 HTML 結構去猜測，準確度最高。
+    2. 【次可靠】如果找不到 __NEXT_DATA__ 或格式跟預期不同，改用 <button> 的
+       disabled 屬性判斷（賣完的款式按鈕會有 disabled 屬性）。
+    3. 【最後手段】如果連按鈕都找不到，退回用文字關鍵字比對（SOLD OUT / ADD TO CART）。
 
-    如果找不到對應的按鈕元素（例如網站改版、或該按鈕需要更多 JS 互動才會出現），
-    會退回用舊的文字關鍵字比對方式當備援，並記錄警告，方便發現網站結構是否變動。
+    每往下退一層都會記錄警告，方便你發現網站結構是否有變動。
     """
+    next_data_status = _check_availability_via_next_data(html, product_names)
+    if next_data_status is not None:
+        return next_data_status
+
+    log.warning("找不到可用的 __NEXT_DATA__ 商品資料，改用按鈕 disabled 屬性判斷（次可靠備援）")
+    return _check_availability_via_buttons(html, product_names)
+
+
+def _check_availability_via_next_data(html: str, product_names):
+    """
+    嘗試從網頁裡的 <script id="__NEXT_DATA__"> JSON 區塊，找到商品的
+    option.options 陣列（裡面有 saleOptionName 和 isSoldOut）。
+    找不到或格式不符就回傳 None，讓上層改用備援方式。
+    """
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        script = soup.find("script", id="__NEXT_DATA__")
+        if not script or not script.string:
+            return None
+
+        next_data = json.loads(script.string)
+        queries = next_data["props"]["pageProps"]["$dehydratedState"]["queries"]
+
+        options = None
+        for q in queries:
+            key = q.get("queryKey") or []
+            if key and isinstance(key[0], str) and key[0].startswith("GET:/api/v1/sales/"):
+                data = (q.get("state") or {}).get("data") or {}
+                option_block = data.get("option") or {}
+                if option_block.get("options"):
+                    options = option_block["options"]
+                    break
+
+        if not options:
+            return None
+
+        name_to_status = {}
+        for opt in options:
+            opt_name = (opt.get("saleOptionName") or "").strip().lower()
+            is_sold_out = opt.get("isSoldOut", True)
+            if opt_name:
+                name_to_status[opt_name] = not is_sold_out
+
+        results = {}
+        for name in product_names:
+            key = name.strip().lower()
+            if key in name_to_status:
+                results[name] = name_to_status[key]
+            else:
+                log.warning("__NEXT_DATA__ 裡找不到商品「%s」，改用按鈕判斷備援", name)
+                results[name] = _check_availability_via_buttons(html, [name])[name]
+
+        return results
+    except Exception as e:
+        log.warning("解析 __NEXT_DATA__ 時發生例外（改用備援）：%s", e)
+        return None
+
+
+def _check_availability_via_buttons(html: str, product_names) -> dict:
+    """次可靠備援：讀取 <button> 的 disabled 屬性"""
     soup = BeautifulSoup(html, "html.parser")
 
-    # 把所有 <button> 依照顯示文字分類，方便用商品名稱查找對應的按鈕
     text_to_buttons: dict[str, list] = {}
     for btn in soup.find_all("button"):
         text = btn.get_text(strip=True)
@@ -176,13 +226,11 @@ def check_availability(html: str, product_names) -> dict:
     for name in product_names:
         matches = text_to_buttons.get(name.strip().lower())
         if matches:
-            # 只要有任何一個符合的按鈕「沒有」disabled 屬性，就視為可購買
             is_available = any(not btn.has_attr("disabled") for btn in matches)
             results[name] = is_available
         else:
             log.warning(
-                "找不到「%s」對應的按鈕元素，改用文字關鍵字比對備援（可能不準確，"
-                "建議留意這款商品的通知結果是否合理）",
+                "找不到「%s」對應的按鈕元素，改用文字關鍵字比對備援（最後手段，可能不準確）",
                 name,
             )
             results[name] = _check_availability_by_keyword_fallback(html, name)
