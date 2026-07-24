@@ -52,7 +52,7 @@ load_dotenv()  # 讀取同目錄下的 .env 檔案
 MONITORED_PAGES = [
     {
         "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/43782",
-        "label": "商品頁 43782 原皮吊飾",
+        "label": "商品頁 43782",
         "products": [
             "CHOI YONG MEONG",
             "HWANG CHOON",
@@ -63,7 +63,7 @@ MONITORED_PAGES = [
     },
     {
         "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/60590",
-        "label": "商品頁 60590 蘋果抱枕",
+        "label": "商品頁 60590",
         "products": [
             "CHOI YONG MEONG",
             "HWANG CHOON",
@@ -239,9 +239,10 @@ def send_to_all_channels(message: str, subject: str = "Weverse 商品開賣通�
     notify_gmail(subject, message)
 
 
-def build_status_message(page: dict, current_state: dict, newly_available: list) -> str:
+def build_status_message(page: dict, current_state: dict, newly_available: list, header: str = None) -> str:
     """組出「完整庫存狀態 + 補貨提醒」的通知內容"""
-    lines = [f"📦 {page['label']}", ""]
+    title = header if header else f"📦 {page['label']}"
+    lines = [title, ""]
 
     for name in page["products"]:
         is_available = current_state.get(name, False)
@@ -312,6 +313,37 @@ def run_once():
     save_state(all_new_state)
 
 
+def run_status_report():
+    """
+    不管有沒有變化，直接查詢並發送「目前所有頁面的完整庫存狀態」。
+    用途：手動想立刻知道現在的庫存狀況，不用等排程自動偵測到變化才通知。
+    """
+    all_previous_state = load_previous_state()
+    all_new_state = dict(all_previous_state)
+
+    for page in MONITORED_PAGES:
+        url = page["url"]
+        label = page["label"]
+        try:
+            html = fetch_page_html(url)
+        except Exception as e:
+            log.error("抓取網頁失敗（%s / %s）：%s", label, url, e)
+            continue
+
+        current_state = check_availability(html, page["products"])
+        all_new_state[url] = current_state
+
+        for name, is_available in current_state.items():
+            status_text = "可購買" if is_available else "不可購買/售完"
+            log.info("[%s] %-20s -> %s", label, name, status_text)
+
+        message = build_status_message(page, current_state, newly_available=[], header=f"🔍 目前庫存查詢：{label}")
+        log.info("[%s] 發送目前庫存狀態查詢結果", label)
+        send_to_all_channels(message, subject="Weverse 庫存狀態查詢")
+
+    save_state(all_new_state)
+
+
 def run_test_notifications():
     """
     獨立的測試功能：不檢查網頁，直接對「有填寫設定」的通知管道各發一則測試訊息，
@@ -357,6 +389,7 @@ def main():
 
     run_only_once = "--once" in sys.argv
     run_test = "--test" in sys.argv
+    run_status = "--status" in sys.argv
 
     log.info("開始監控 %d 個 Weverse 商品頁面", len(MONITORED_PAGES))
     for page in MONITORED_PAGES:
@@ -365,6 +398,11 @@ def main():
     if run_test:
         log.info("以 --test 模式執行（只發測試通知，不檢查商品頁面）")
         run_test_notifications()
+        return
+
+    if run_status:
+        log.info("以 --status 模式執行（直接查詢並回報目前庫存狀態）")
+        run_status_report()
         return
 
     if run_only_once:
