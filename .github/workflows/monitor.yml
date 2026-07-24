@@ -10,6 +10,10 @@ on:
         description: "勾選後只發送測試通知，不檢查商品頁面（用來驗證 Discord/Telegram/Gmail 有沒有設定成功）"
         type: boolean
         default: false
+      status_check:
+        description: "勾選後立即查詢並發送目前完整庫存狀態（不用等排程自動偵測到變化）"
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # 需要這個權限才能把 state.json 的最新狀態寫回倉庫
@@ -40,6 +44,8 @@ jobs:
         run: |
           if [ "${{ inputs.test_notification }}" = "true" ]; then
             python weverse_monitor.py --test
+          elif [ "${{ inputs.status_check }}" = "true" ]; then
+            python weverse_monitor.py --status
           else
             python weverse_monitor.py --once
           fi
