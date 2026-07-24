@@ -61,6 +61,12 @@ MONITORED_PAGES = [
         "is_single": True,           # 告訴程式這是一個沒有款式選項的單一商品
         "products": ["球專"],  # 你希望在通知訊息裡顯示的名字，隨便取即可
     },
+    {
+        "url": "https://shop.weverse.io/zh-tw/shop/KRW/artists/255/sales/59124",
+        "label": "商品頁 59124 (單一商品)",
+        "is_single": True,           # 告訴程式這是一個沒有款式選項的單一商品
+        "products": ["綠綠專"],  # 你希望在通知訊息裡顯示的名字，隨便取即可
+    },
 ]
 
 CHECK_INTERVAL_SECONDS = 15 * 60  # 15 分鐘
