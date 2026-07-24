@@ -142,27 +142,49 @@ def check_availability(html: str, product_names) -> dict:
     """
     回傳格式： {"CHOI YONG MEONG": True/False, ...}
     True 代表判斷為「可購買」，False 代表「不可購買 / 找不到 / 售完」
+
+    判斷方式：先找出每個商品名稱在網頁原始碼裡「第一次出現」的位置，
+    然後把這些位置由前到後排序，每個商品名稱的「判讀範圍」限定在
+    「這個名稱出現的位置」到「下一個商品名稱出現的位置」之間（而不是
+    固定往前後各抓 N 個字元）。這樣可以避免商品名稱彼此距離很近時，
+    誤判成隔壁商品的庫存狀態（例如把 A 商品的 SOLD OUT 誤判成 B 商品的狀態）。
     """
     lower_html = html.lower()
-    results = {}
 
+    # 找出每個商品名稱第一次出現的位置
+    positions = []
     for name in product_names:
         idx = lower_html.find(name.lower())
         if idx == -1:
             log.warning("在頁面上找不到商品名稱：%s（可能是名稱打錯，或該區塊需要 JS 才會出現）", name)
-            results[name] = False
-            continue
+        else:
+            positions.append((idx, name))
 
-        start = max(0, idx - CONTEXT_WINDOW)
-        end = min(len(lower_html), idx + len(name) + CONTEXT_WINDOW)
-        context = lower_html[start:end]
+    # 依照在網頁原始碼裡「實際出現的先後順序」排序（不一定等於 product_names 的順序）
+    positions.sort(key=lambda p: p[0])
+
+    results = {}
+    for i, (idx, name) in enumerate(positions):
+        # 判讀範圍：往前抓一小段（避免漏掉緊接在名稱前面的狀態文字），
+        # 往後只抓到「下一個商品名稱出現的位置」為止，避免跨到隔壁商品
+        back_start = max(0, idx - 50)
+        if i + 1 < len(positions):
+            forward_end = positions[i + 1][0]
+        else:
+            forward_end = min(len(lower_html), idx + CONTEXT_WINDOW)
+
+        context = lower_html[back_start:forward_end]
 
         has_sold_out = any(kw in context for kw in SOLD_OUT_KEYWORDS)
         has_available_word = any(kw in context for kw in AVAILABLE_KEYWORDS)
 
-        # 判斷邏輯：沒有 SOLD OUT 字樣，且有出現 ADD TO CART / PURCHASE 字樣 -> 可購買
         is_available = (not has_sold_out) and has_available_word
         results[name] = is_available
+
+    # 找不到的名稱一律視為不可購買
+    for name in product_names:
+        if name not in results:
+            results[name] = False
 
     return results
 
