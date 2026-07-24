@@ -74,6 +74,17 @@ MONITORED_PAGES = [
             "HHM NYA RING",
         ],
     },
+    {
+        "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/61334",
+        "label": "商品頁 61334",
+        "products": [
+            "CHOI YONG MEONG",
+            "HWANG CHOON",
+            "BAMGEUT",
+            "DA-GO-NYANG",
+            "HHM NYA RING",
+        ],
+    },
 ]
 
 CHECK_INTERVAL_SECONDS = 15 * 60  # 15 分鐘
