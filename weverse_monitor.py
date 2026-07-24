@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Weverse Shop 商品到貨/開賣通知程式
+Weverse Shop 商品到貨/開賣通知程式（支援同時監控多個商品頁面）
 =====================================
 
 功能：
-1. 每隔 CHECK_INTERVAL_SECONDS（預設 900 秒 = 15 分鐘）檢查一次指定的 Weverse 商品頁面。
-2. 針對指定的商品名稱清單，判斷每個商品目前是「SOLD OUT（售完/無法購買）」
+1. 每隔 CHECK_INTERVAL_SECONDS（預設 900 秒 = 15 分鐘）檢查一次 MONITORED_PAGES
+   裡列出的每一個 Weverse 商品頁面。
+2. 針對每個頁面裡指定的商品名稱清單，判斷每個商品目前是「SOLD OUT（售完/無法購買）」
    還是「可購買（頁面出現 ADD TO CART 或 PURCHASE 字樣、且沒有 SOLD OUT 字樣）」。
-3. 只有在「狀態從『不可購買』變成『可購買』」時才發出通知（避免每 15 分鐘狂發同樣的訊息）。
-4. 支援三種通知方式：Discord Webhook、Telegram Bot、Gmail（可以同時開啟多種）。
+3. 每次通知都會列出「這個頁面目前所有商品的完整庫存狀態」，
+   如果有商品是「這次才從不可購買變成可購買」，會額外加一行「XXX 補貨了！」。
+4. 第一次執行某個頁面時（還沒有歷史狀態可以比較），只會記錄當下狀態當作基準值，
+   不會發送「補貨了」通知（避免把「本來就有貨」誤判成「剛補貨」）。
+5. 支援三種通知方式：Discord Webhook、Telegram Bot、Gmail（可以同時開啟多種）。
 
 ⚠️ 重要提醒（請務必閱讀）：
 Weverse Shop 是用 Next.js 打造的網站，商品頁面裡「選擇款式」的下拉選單
-（例如 CHOI YONG MEONG / HWANG CHOON / BAMGEUT ...）在某些情況下是由瀏覽器端的
-JavaScript 動態渲染或動態抓取庫存資料。這支程式預設用「直接下載網頁原始碼」
-（requests）的方式去偵測文字，如果實際測試發現抓不到正確的售罄狀態
-（例如每次都顯示同一種結果、或抓不到 5 款商品的名稱），
-代表該區塊需要瀏覽器執行 JavaScript 才會出現，這時請改用下面「進階：Playwright 版本」
-的做法（本檔案底部有寫法說明），用真的瀏覽器（headless browser）去渲染後再判斷。
+在某些情況下是由瀏覽器端的 JavaScript 動態渲染或動態抓取庫存資料。這支程式預設用
+「直接下載網頁原始碼」（requests）的方式去偵測文字，如果實際測試發現抓不到正確的
+售罄狀態，代表該區塊需要瀏覽器執行 JavaScript 才會出現，這時請改用本檔案底部
+「進階：Playwright 版本」的做法。
 
 使用前請先：
     pip install -r requirements.txt
@@ -26,7 +28,6 @@ JavaScript 動態渲染或動態抓取庫存資料。這支程式預設用「直
 """
 
 import os
-import re
 import json
 import time
 import logging
@@ -39,20 +40,38 @@ import requests
 from dotenv import load_dotenv
 
 # ------------------------------------------------------------------
-# 基本設定
+# 基本設定：想追蹤的商品頁面清單
 # ------------------------------------------------------------------
 
 load_dotenv()  # 讀取同目錄下的 .env 檔案
 
-PRODUCT_URL = "https://shop.weverse.io/en/shop/KRW/artists/3/sales/43782"
-
-# 想要追蹤的 5 款商品名稱
-TARGET_PRODUCTS = [
-    "CHOI YONG MEONG",
-    "HWANG CHOON",
-    "BAMGEUT",
-    "DA-GO-NYANG",
-    "HHM NYA RING",
+# 每一個項目代表一個要監控的商品頁面：
+#   url      -> 商品頁面網址
+#   label    -> 這個頁面的顯示名稱（通知訊息裡會用到，方便分辨是哪一個頁面）
+#   products -> 這個頁面裡要追蹤的商品名稱清單
+MONITORED_PAGES = [
+    {
+        "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/43782",
+        "label": "商品頁 43782 原皮吊飾",
+        "products": [
+            "CHOI YONG MEONG",
+            "HWANG CHOON",
+            "BAMGEUT",
+            "DA-GO-NYANG",
+            "HHM NYA RING",
+        ],
+    },
+    {
+        "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/60590",
+        "label": "商品頁 60590 蘋果抱枕",
+        "products": [
+            "CHOI YONG MEONG",
+            "HWANG CHOON",
+            "BAMGEUT",
+            "DA-GO-NYANG",
+            "HHM NYA RING",
+        ],
+    },
 ]
 
 CHECK_INTERVAL_SECONDS = 15 * 60  # 15 分鐘
@@ -130,7 +149,6 @@ def check_availability(html: str, product_names) -> dict:
     for name in product_names:
         idx = lower_html.find(name.lower())
         if idx == -1:
-            # 在頁面上找不到這個商品名稱，先記為不可購買，並記錄警告方便除錯
             log.warning("在頁面上找不到商品名稱：%s（可能是名稱打錯，或該區塊需要 JS 才會出現）", name)
             results[name] = False
             continue
@@ -151,6 +169,7 @@ def check_availability(html: str, product_names) -> dict:
 
 # ------------------------------------------------------------------
 # 狀態儲存（避免重複通知）
+# 格式： { "<頁面網址>": {"<商品名稱>": true/false, ...}, ... }
 # ------------------------------------------------------------------
 
 def load_previous_state() -> dict:
@@ -214,51 +233,83 @@ def notify_gmail(subject: str, message: str) -> None:
         log.error("Gmail 通知發生例外：%s", e)
 
 
-def notify_all(newly_available):
-    """newly_available: 這次新偵測到「可購買」的商品名稱清單"""
-    if not newly_available:
-        return
-
-    lines = ["🎉 Weverse 商品現在可以購買了！", ""]
-    for name in newly_available:
-        lines.append(f"• {name}")
-    lines.append("")
-    lines.append(PRODUCT_URL)
-    lines.append(datetime.now().strftime("偵測時間：%Y-%m-%d %H:%M:%S"))
-    message = "\n".join(lines)
-
-    log.info("發現新可購買商品，發送通知：%s", newly_available)
-
+def send_to_all_channels(message: str, subject: str = "Weverse 商品開賣通知") -> None:
     notify_discord(message)
     notify_telegram(message)
-    notify_gmail("Weverse 商品開賣通知", message)
+    notify_gmail(subject, message)
+
+
+def build_status_message(page: dict, current_state: dict, newly_available: list) -> str:
+    """組出「完整庫存狀態 + 補貨提醒」的通知內容"""
+    lines = [f"📦 {page['label']}", ""]
+
+    for name in page["products"]:
+        is_available = current_state.get(name, False)
+        status_text = "✅ 有貨" if is_available else "❌ 缺貨"
+        lines.append(f"{status_text }：{name}")
+
+    if newly_available:
+        lines.append("")
+        for name in newly_available:
+            lines.append(f"🎉 {name} 補貨了！")
+
+    lines.append("")
+    lines.append(page["url"])
+    lines.append(datetime.now().strftime("偵測時間：%Y-%m-%d %H:%M:%S"))
+    return "\n".join(lines)
 
 
 # ------------------------------------------------------------------
 # 主流程
 # ------------------------------------------------------------------
 
-def run_once():
-    try:
-        html = fetch_page_html(PRODUCT_URL)
-    except Exception as e:
-        log.error("抓取網頁失敗：%s", e)
-        return
+def check_one_page(page: dict, all_previous_state: dict) -> dict:
+    """
+    檢查單一頁面，回傳這個頁面最新的狀態（{商品名稱: True/False}）。
+    如果有需要通知的內容（新補貨），會直接發送通知。
+    """
+    url = page["url"]
+    label = page["label"]
 
-    current_state = check_availability(html, TARGET_PRODUCTS)
-    previous_state = load_previous_state()
+    try:
+        html = fetch_page_html(url)
+    except Exception as e:
+        log.error("抓取網頁失敗（%s / %s）：%s", label, url, e)
+        # 抓取失敗就沿用上一次的狀態，避免把「抓取失敗」誤判成「全部售完」
+        return all_previous_state.get(url, {})
+
+    current_state = check_availability(html, page["products"])
+
+    is_first_run_for_page = url not in all_previous_state
+    previous_state_for_page = all_previous_state.get(url, {})
 
     newly_available = []
     for name, is_available in current_state.items():
-        was_available = previous_state.get(name, False)
+        was_available = previous_state_for_page.get(name, False)
         status_text = "可購買" if is_available else "不可購買/售完"
-        log.info("%-20s -> %s", name, status_text)
+        log.info("[%s] %-20s -> %s", label, name, status_text)
 
         if is_available and not was_available:
             newly_available.append(name)
 
-    notify_all(newly_available)
-    save_state(current_state)
+    if is_first_run_for_page:
+        log.info("[%s] 第一次檢查這個頁面，記錄目前狀態作為基準值，不發送補貨通知", label)
+    elif newly_available:
+        message = build_status_message(page, current_state, newly_available)
+        log.info("[%s] 偵測到補貨，發送通知：%s", label, newly_available)
+        send_to_all_channels(message)
+
+    return current_state
+
+
+def run_once():
+    all_previous_state = load_previous_state()
+    all_new_state = dict(all_previous_state)  # 保留其他頁面舊的狀態，逐一更新
+
+    for page in MONITORED_PAGES:
+        all_new_state[page["url"]] = check_one_page(page, all_previous_state)
+
+    save_state(all_new_state)
 
 
 def run_test_notifications():
@@ -307,8 +358,9 @@ def main():
     run_only_once = "--once" in sys.argv
     run_test = "--test" in sys.argv
 
-    log.info("開始監控 Weverse 商品頁面：%s", PRODUCT_URL)
-    log.info("追蹤商品：%s", ", ".join(TARGET_PRODUCTS))
+    log.info("開始監控 %d 個 Weverse 商品頁面", len(MONITORED_PAGES))
+    for page in MONITORED_PAGES:
+        log.info("  - %s：%s", page["label"], page["url"])
 
     if run_test:
         log.info("以 --test 模式執行（只發測試通知，不檢查商品頁面）")
