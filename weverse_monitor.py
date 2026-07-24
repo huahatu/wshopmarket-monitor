@@ -63,8 +63,8 @@ MONITORED_PAGES = [
         ],
     },
     {
-        "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/60590",
-        "label": "商品頁 60590",
+        "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/61334",
+        "label": "商品頁 61334",
         "products": [
             "CHOI YONG MEONG",
             "HWANG CHOON",
