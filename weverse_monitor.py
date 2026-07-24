@@ -74,8 +74,8 @@ CHECK_INTERVAL_SECONDS = 15 * 60  # 15 分鐘
 STATE_FILE = Path(__file__).parent / "state.json"
 LOG_FILE = Path(__file__).parent / "monitor.log"
 
-SOLD_OUT_KEYWORDS = ["sold out", "품절", "매진"]
-AVAILABLE_KEYWORDS = ["add to cart", "purchase", "buy now"]
+SOLD_OUT_KEYWORDS = ["sold out", "품절", "매진", "售罄", "已售完", "暫無庫存", "缺貨"]
+AVAILABLE_KEYWORDS = ["add to cart", "purchase", "buy now", "購買", "加入購物車", "立即購買"]
 CONTEXT_WINDOW = 300
 
 # ------------------------------------------------------------------
