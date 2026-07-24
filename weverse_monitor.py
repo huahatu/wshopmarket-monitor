@@ -38,17 +38,6 @@ MONITORED_PAGES = [
         ],
     },
     {
-        "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/60590",
-        "label": "商品頁 60590",
-        "products": [
-            "CHOI YONG MEONG",
-            "HWANG CHOON",
-            "BAMGEUT",
-            "DA-GO-NYANG",
-            "HHM NYA RING",
-        ],
-    },
-    {
         "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/61334",
         "label": "商品頁 61334",
         "products": [
@@ -65,6 +54,12 @@ MONITORED_PAGES = [
         "label": "商品頁 51616 (單一商品)",
         "is_single": True,           # 告訴程式這是一個沒有款式選項的單一商品
         "products": ["缽專"],  # 你希望在通知訊息裡顯示的名字，隨便取即可
+    },
+    {
+        "url": "https://shop.weverse.io/en/shop/KRW/artists/255/sales/51617",
+        "label": "商品頁 51617 (單一商品)",
+        "is_single": True,           # 告訴程式這是一個沒有款式選項的單一商品
+        "products": ["球專"],  # 你希望在通知訊息裡顯示的名字，隨便取即可
     },
 ]
 
