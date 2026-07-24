@@ -187,6 +187,17 @@ def _check_availability_via_next_data(html: str, product_names, expected_sale_id
     嘗試從網頁裡的 <script id="__NEXT_DATA__"> JSON 區塊，找到「這個商品自己」的
     option.options 陣列（裡面有 saleOptionName 和 isSoldOut）。
     找不到、格式不符，或商品編號對不上，就回傳 None，讓上層改用備援方式。
+
+    ⚠️ 重要：商品資料裡有兩層狀態需要一起看，缺一不可：
+    1. 最上層的 data["status"]（例如 "SALE" / "SOLD_OUT" / "TO_BE_SOLD" / "STOP" / "SALE_END"）
+       代表「這個商品整體」目前是否真的在販售中。
+    2. 每個款式自己的 isSoldOut，代表「這一款」是否賣完。
+
+    只有當最上層 status 是 "SALE" 時，才能相信每個款式各自的 isSoldOut 數值；
+    如果最上層 status 不是 "SALE"（例如商品整體被下架、還沒開賣、或標記為 SOLD_OUT），
+    不管每個款式各自的 isSoldOut 寫什麼，一律視為「全部不可購買」——因為曾經實際遇過
+    「商品整體被標記 SOLD_OUT，但底下每個款式的 isSoldOut 卻還留著 false 的舊值/預設值」
+    這種資料不一致的情況。
     """
     try:
         soup = BeautifulSoup(html, "html.parser")
@@ -210,20 +221,24 @@ def _check_availability_via_next_data(html: str, product_names, expected_sale_id
                         query_sale_id = key[1].get("saleId")
                     # data 裡通常也會有 saleId 欄位，雙重確認
                     data_sale_id = data.get("saleId")
+                    overall_status = data.get("status")
                     candidates.append(
                         (str(query_sale_id) if query_sale_id is not None else None,
                          str(data_sale_id) if data_sale_id is not None else None,
-                         option_block["options"])
+                         option_block["options"],
+                         overall_status)
                     )
 
         if not candidates:
             return None
 
         options = None
+        overall_status = None
         if expected_sale_id is not None:
-            for query_sale_id, data_sale_id, opts in candidates:
+            for query_sale_id, data_sale_id, opts, status in candidates:
                 if expected_sale_id in (query_sale_id, data_sale_id):
                     options = opts
+                    overall_status = status
                     break
             if options is None:
                 log.warning(
@@ -235,6 +250,16 @@ def _check_availability_via_next_data(html: str, product_names, expected_sale_id
         else:
             # 沒有提供 expected_sale_id 時，退回用第一筆（維持舊行為，但風險較高）
             options = candidates[0][2]
+            overall_status = candidates[0][3]
+
+        # 商品整體如果不是「販售中」，不管每個款式各自寫什麼，一律視為全部不可購買
+        if overall_status != "SALE":
+            log.info(
+                "商品整體狀態為「%s」（不是 SALE），視為全部款式皆不可購買，"
+                "不採用各款式各自的 isSoldOut 數值",
+                overall_status,
+            )
+            return {name: False for name in product_names}
 
         name_to_status = {}
         for opt in options:
