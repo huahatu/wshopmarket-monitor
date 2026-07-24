@@ -16,11 +16,12 @@ Weverse Shop 商品到貨/開賣通知程式（支援同時監控多個商品頁
 5. 支援三種通知方式：Discord Webhook、Telegram Bot、Gmail（可以同時開啟多種）。
 
 ⚠️ 重要提醒（請務必閱讀）：
-Weverse Shop 是用 Next.js 打造的網站，商品頁面裡「選擇款式」的下拉選單
-在某些情況下是由瀏覽器端的 JavaScript 動態渲染或動態抓取庫存資料。這支程式預設用
-「直接下載網頁原始碼」（requests）的方式去偵測文字，如果實際測試發現抓不到正確的
-售罄狀態，代表該區塊需要瀏覽器執行 JavaScript 才會出現，這時請改用本檔案底部
-「進階：Playwright 版本」的做法。
+Weverse Shop 是用 Next.js 打造的網站。這支程式判斷「有沒有貨」的優先順序是：
+1. 讀取 <button> 的 disabled 屬性（網站自己算好的最終結果，最準確）
+2. 找不到對應按鈕時，改用網頁裡的 __NEXT_DATA__ JSON 資料補齊
+3. 兩者都沒有時，才退回用文字關鍵字比對（SOLD OUT / ADD TO CART）
+如果實際測試發現判斷持續不準，代表網站結構有變動，這時請改用本檔案底部
+「進階：Playwright 版本」的做法，用真的瀏覽器渲染後再判斷。
 
 使用前請先：
     pip install -r requirements.txt
@@ -163,23 +164,36 @@ def check_availability(html: str, product_names, expected_sale_id=None) -> dict:
     True 代表判斷為「可購買」，False 代表「不可購買 / 找不到 / 售完」
 
     判斷方式（依可靠度由高到低，逐層備援）：
-    1. 【最可靠】解析網頁裡的 __NEXT_DATA__ JSON 區塊，這是 Weverse 網站自己內部
-       使用的資料，裡面每個款式都直接寫著 isSoldOut: true/false，不需要用任何
-       文字或 HTML 結構去猜測，準確度最高。這裡會用 expected_sale_id 明確比對
-       「這筆資料是不是這個商品本身的」，避免頁面裡如果還夾雜其他商品（例如
-       推薦商品區塊）的資料時，不小心抓到別的商品的庫存狀態。
-    2. 【次可靠】如果找不到 __NEXT_DATA__ 或格式跟預期不同，改用 <button> 的
-       disabled 屬性判斷（賣完的款式按鈕會有 disabled 屬性）。
-    3. 【最後手段】如果連按鈕都找不到，退回用文字關鍵字比對（SOLD OUT / ADD TO CART）。
+    1. 【最可靠，優先採用】讀取 <button> 的 disabled 屬性。這是 Weverse 網站自己的
+       程式「最終算好、實際呈現」的結果——不管網站內部用了幾層規則（商品整體
+       狀態、單一款式庫存、開賣時間等等），最後都會統一反映在按鈕能不能按上面，
+       我們直接採用這個「已經算好的最終答案」，不用自己去猜測、拼湊他們的
+       商業規則有幾種、彼此怎麼互相影響。
+    2. 【次可靠，用來補齊漏網之魚】如果某些款式在按鈕裡找不到對應項目（例如網站
+       改版），改用 __NEXT_DATA__ JSON 裡的資料補齊，並用 expected_sale_id 明確
+       比對商品編號，避免抓到別的商品的庫存狀態。
+    3. 【最後手段】如果連按鈕、JSON 都沒有這款商品的資料，退回用文字關鍵字比對
+       （SOLD OUT / ADD TO CART）。
 
     每往下退一層都會記錄警告，方便你發現網站結構是否有變動。
     """
-    next_data_status = _check_availability_via_next_data(html, product_names, expected_sale_id)
-    if next_data_status is not None:
-        return next_data_status
+    button_results, missing_names = _check_availability_via_buttons_only(html, product_names)
 
-    log.warning("找不到可用的 __NEXT_DATA__ 商品資料，改用按鈕 disabled 屬性判斷（次可靠備援）")
-    return _check_availability_via_buttons(html, product_names)
+    if not missing_names:
+        return button_results
+
+    log.warning("按鈕判斷找不到「%s」，嘗試改用 __NEXT_DATA__ JSON 補齊", missing_names)
+    json_results = _check_availability_via_next_data(html, missing_names, expected_sale_id)
+    if json_results:
+        button_results.update(json_results)
+        missing_names = [n for n in missing_names if n not in json_results]
+
+    if missing_names:
+        log.warning("__NEXT_DATA__ 也沒有「%s」的資料，改用文字關鍵字比對（最後手段，可能不準確）", missing_names)
+        for name in missing_names:
+            button_results[name] = _check_availability_by_keyword_fallback(html, name)
+
+    return button_results
 
 
 def _check_availability_via_next_data(html: str, product_names, expected_sale_id=None):
@@ -273,9 +287,8 @@ def _check_availability_via_next_data(html: str, product_names, expected_sale_id
             key = name.strip().lower()
             if key in name_to_status:
                 results[name] = name_to_status[key]
-            else:
-                log.warning("__NEXT_DATA__ 裡找不到商品「%s」，改用按鈕判斷備援", name)
-                results[name] = _check_availability_via_buttons(html, [name])[name]
+            # 找不到的名稱直接略過，讓上層 check_availability 決定下一步備援
+            # （不在這裡遞迴呼叫按鈕判斷，避免備援順序混亂）
 
         return results
     except Exception as e:
@@ -283,8 +296,15 @@ def _check_availability_via_next_data(html: str, product_names, expected_sale_id
         return None
 
 
-def _check_availability_via_buttons(html: str, product_names) -> dict:
-    """次可靠備援：讀取 <button> 的 disabled 屬性"""
+def _check_availability_via_buttons_only(html: str, product_names):
+    """
+    【主要判斷方式】讀取 <button> 的 disabled 屬性——這是網站自己算好、
+    最終呈現給使用者看的結果，不需要我們自己去猜測/拼湊他們的商業規則。
+
+    回傳 (results, missing_names)：
+      results       -> {商品名稱: True/False}，只包含「有找到對應按鈕」的商品
+      missing_names -> 找不到對應按鈕的商品名稱清單，交由上層改用 JSON 或關鍵字備援
+    """
     soup = BeautifulSoup(html, "html.parser")
 
     text_to_buttons: dict[str, list] = {}
@@ -294,19 +314,16 @@ def _check_availability_via_buttons(html: str, product_names) -> dict:
             text_to_buttons.setdefault(text.lower(), []).append(btn)
 
     results = {}
+    missing_names = []
     for name in product_names:
         matches = text_to_buttons.get(name.strip().lower())
         if matches:
             is_available = any(not btn.has_attr("disabled") for btn in matches)
             results[name] = is_available
         else:
-            log.warning(
-                "找不到「%s」對應的按鈕元素，改用文字關鍵字比對備援（最後手段，可能不準確）",
-                name,
-            )
-            results[name] = _check_availability_by_keyword_fallback(html, name)
+            missing_names.append(name)
 
-    return results
+    return results, missing_names
 
 
 def _check_availability_by_keyword_fallback(html: str, name: str) -> bool:
