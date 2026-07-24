@@ -28,6 +28,7 @@ Weverse Shop 是用 Next.js 打造的網站，商品頁面裡「選擇款式」�
 """
 
 import os
+import re
 import json
 import time
 import logging
@@ -63,8 +64,8 @@ MONITORED_PAGES = [
         ],
     },
     {
-        "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/61334",
-        "label": "商品頁 61334",
+        "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/60590",
+        "label": "商品頁 60590",
         "products": [
             "CHOI YONG MEONG",
             "HWANG CHOON",
@@ -139,7 +140,13 @@ def fetch_page_html(url: str) -> str:
 # 判斷各商品的可購買狀態
 # ------------------------------------------------------------------
 
-def check_availability(html: str, product_names) -> dict:
+def extract_sale_id_from_url(url: str):
+    """從商品網址（.../sales/60590）取出商品編號，取不到就回傳 None"""
+    match = re.search(r"/sales/(\d+)", url)
+    return match.group(1) if match else None
+
+
+def check_availability(html: str, product_names, expected_sale_id=None) -> dict:
     """
     回傳格式： {"CHOI YONG MEONG": True/False, ...}
     True 代表判斷為「可購買」，False 代表「不可購買 / 找不到 / 售完」
@@ -147,14 +154,16 @@ def check_availability(html: str, product_names) -> dict:
     判斷方式（依可靠度由高到低，逐層備援）：
     1. 【最可靠】解析網頁裡的 __NEXT_DATA__ JSON 區塊，這是 Weverse 網站自己內部
        使用的資料，裡面每個款式都直接寫著 isSoldOut: true/false，不需要用任何
-       文字或 HTML 結構去猜測，準確度最高。
+       文字或 HTML 結構去猜測，準確度最高。這裡會用 expected_sale_id 明確比對
+       「這筆資料是不是這個商品本身的」，避免頁面裡如果還夾雜其他商品（例如
+       推薦商品區塊）的資料時，不小心抓到別的商品的庫存狀態。
     2. 【次可靠】如果找不到 __NEXT_DATA__ 或格式跟預期不同，改用 <button> 的
        disabled 屬性判斷（賣完的款式按鈕會有 disabled 屬性）。
     3. 【最後手段】如果連按鈕都找不到，退回用文字關鍵字比對（SOLD OUT / ADD TO CART）。
 
     每往下退一層都會記錄警告，方便你發現網站結構是否有變動。
     """
-    next_data_status = _check_availability_via_next_data(html, product_names)
+    next_data_status = _check_availability_via_next_data(html, product_names, expected_sale_id)
     if next_data_status is not None:
         return next_data_status
 
@@ -162,11 +171,11 @@ def check_availability(html: str, product_names) -> dict:
     return _check_availability_via_buttons(html, product_names)
 
 
-def _check_availability_via_next_data(html: str, product_names):
+def _check_availability_via_next_data(html: str, product_names, expected_sale_id=None):
     """
-    嘗試從網頁裡的 <script id="__NEXT_DATA__"> JSON 區塊，找到商品的
+    嘗試從網頁裡的 <script id="__NEXT_DATA__"> JSON 區塊，找到「這個商品自己」的
     option.options 陣列（裡面有 saleOptionName 和 isSoldOut）。
-    找不到或格式不符就回傳 None，讓上層改用備援方式。
+    找不到、格式不符，或商品編號對不上，就回傳 None，讓上層改用備援方式。
     """
     try:
         soup = BeautifulSoup(html, "html.parser")
@@ -177,18 +186,44 @@ def _check_availability_via_next_data(html: str, product_names):
         next_data = json.loads(script.string)
         queries = next_data["props"]["pageProps"]["$dehydratedState"]["queries"]
 
-        options = None
+        # 先收集所有「長得像商品資料」的候選項，稍後依 expected_sale_id 精準篩選
+        candidates = []
         for q in queries:
             key = q.get("queryKey") or []
             if key and isinstance(key[0], str) and key[0].startswith("GET:/api/v1/sales/"):
                 data = (q.get("state") or {}).get("data") or {}
                 option_block = data.get("option") or {}
                 if option_block.get("options"):
-                    options = option_block["options"]
-                    break
+                    query_sale_id = None
+                    if len(key) > 1 and isinstance(key[1], dict):
+                        query_sale_id = key[1].get("saleId")
+                    # data 裡通常也會有 saleId 欄位，雙重確認
+                    data_sale_id = data.get("saleId")
+                    candidates.append(
+                        (str(query_sale_id) if query_sale_id is not None else None,
+                         str(data_sale_id) if data_sale_id is not None else None,
+                         option_block["options"])
+                    )
 
-        if not options:
+        if not candidates:
             return None
+
+        options = None
+        if expected_sale_id is not None:
+            for query_sale_id, data_sale_id, opts in candidates:
+                if expected_sale_id in (query_sale_id, data_sale_id):
+                    options = opts
+                    break
+            if options is None:
+                log.warning(
+                    "__NEXT_DATA__ 裡找到 %d 筆商品資料，但沒有一筆的商品編號跟網址（%s）相符，"
+                    "改用按鈕判斷備援，避免抓到別的商品的庫存狀態",
+                    len(candidates), expected_sale_id,
+                )
+                return None
+        else:
+            # 沒有提供 expected_sale_id 時，退回用第一筆（維持舊行為，但風險較高）
+            options = candidates[0][2]
 
         name_to_status = {}
         for opt in options:
@@ -367,7 +402,7 @@ def check_one_page(page: dict, all_previous_state: dict) -> dict:
         # 抓取失敗就沿用上一次的狀態，避免把「抓取失敗」誤判成「全部售完」
         return all_previous_state.get(url, {})
 
-    current_state = check_availability(html, page["products"])
+    current_state = check_availability(html, page["products"], expected_sale_id=extract_sale_id_from_url(url))
 
     is_first_run_for_page = url not in all_previous_state
     previous_state_for_page = all_previous_state.get(url, {})
@@ -418,7 +453,7 @@ def run_status_report():
             log.error("抓取網頁失敗（%s / %s）：%s", label, url, e)
             continue
 
-        current_state = check_availability(html, page["products"])
+        current_state = check_availability(html, page["products"], expected_sale_id=extract_sale_id_from_url(url))
         all_new_state[url] = current_state
 
         for name, is_available in current_state.items():
