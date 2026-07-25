@@ -13,7 +13,7 @@ import logging
 import smtplib
 from email.mime.text import MIMEText
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 import requests
 from bs4 import BeautifulSoup
@@ -74,6 +74,8 @@ MONITORED_PAGES = [
 ]
 
 CHECK_INTERVAL_SECONDS = 15 * 60  # 15 分鐘
+
+TAIWAN_TZ = timezone(timedelta(hours=8))  # 通知訊息裡的時間一律顯示台灣時間（UTC+8）
 
 STATE_FILE = Path(__file__).parent / "state.json"
 LOG_FILE = Path(__file__).parent / "monitor.log"
@@ -402,7 +404,7 @@ def build_status_message(page: dict, current_state: dict, newly_available: list,
             lines.append(f"🎉 {name} 補貨了！")
     lines.append("")
     lines.append(page["url"])
-    lines.append(datetime.now().strftime("偵測時間：%Y-%m-%d %H:%M:%S"))
+    lines.append(datetime.now(TAIWAN_TZ).strftime("偵測時間：%Y-%m-%d %H:%M:%S"))
     return "\n".join(lines)
 
 
@@ -493,7 +495,7 @@ def run_test_notifications():
     message = (
         "✅ 這是一則測試訊息\n\n"
         "如果你在 Discord / Telegram / Gmail 收到這則訊息，代表這個通知管道設定成功。\n"
-        f"發送時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        f"發送時間：{datetime.now(TAIWAN_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
     )
     sent_any = False
     if DISCORD_WEBHOOK_URL:
