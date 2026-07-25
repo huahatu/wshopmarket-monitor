@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Weverse Shop 商品到貨/開賣通知程式（支援同時監控多個商品頁面）
+Weverse Shop 商品到貨/開賣通知程式（支援同時監控多個商品頁面，含單一商品/無選項商品）
 =====================================
 """
 
@@ -25,6 +25,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# 每一個項目：
+#   url        -> 商品頁面網址
+#   label      -> 顯示名稱
+#   products   -> 要追蹤的商品名稱清單（is_single=True 時，放一個你自己取的名字即可）
+#   is_single  -> True 代表這是「沒有款式選項、只有一個購買按鈕」的單一商品
 MONITORED_PAGES = [
     {
         "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/43782",
@@ -48,24 +53,23 @@ MONITORED_PAGES = [
             "HHM NYA RING",
         ],
     },
-    # 👇 新增的單一商品頁面在這裡
     {
         "url": "https://shop.weverse.io/en/shop/KRW/artists/255/sales/51616",
-        "label": "商品頁 51616 (單一商品)",
-        "is_single": True,           # 告訴程式這是一個沒有款式選項的單一商品
-        "products": ["缽專"],  # 你希望在通知訊息裡顯示的名字，隨便取即可
+        "label": "商品頁 51616（單一商品）",
+        "is_single": True,
+        "products": ["缽專"],
     },
     {
         "url": "https://shop.weverse.io/en/shop/KRW/artists/255/sales/51617",
-        "label": "商品頁 51617 (單一商品)",
-        "is_single": True,           # 告訴程式這是一個沒有款式選項的單一商品
-        "products": ["球專"],  # 你希望在通知訊息裡顯示的名字，隨便取即可
+        "label": "商品頁 51617（單一商品）",
+        "is_single": True,
+        "products": ["球專"],
     },
     {
         "url": "https://shop.weverse.io/zh-tw/shop/KRW/artists/255/sales/59124",
-        "label": "商品頁 59124 (單一商品)",
-        "is_single": True,           # 告訴程式這是一個沒有款式選項的單一商品
-        "products": ["綠綠專"],  # 你希望在通知訊息裡顯示的名字，隨便取即可
+        "label": "商品頁 59124（單一商品）",
+        "is_single": True,
+        "products": ["綠綠專"],
     },
 ]
 
@@ -113,10 +117,12 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
+
 def fetch_page_html(url: str) -> str:
     resp = requests.get(url, headers=HEADERS, timeout=20)
     resp.raise_for_status()
     return resp.text
+
 
 # ------------------------------------------------------------------
 # 判斷各商品的可購買狀態
@@ -126,7 +132,14 @@ def extract_sale_id_from_url(url: str):
     match = re.search(r"/sales/(\d+)", url)
     return match.group(1) if match else None
 
+
 def check_availability(html: str, product_names, expected_sale_id=None, is_single=False) -> dict:
+    """
+    判斷順序：
+    1. 按鈕 disabled 屬性（最準確，網站自己算好的最終結果）
+    2. __NEXT_DATA__ JSON（按鈕找不到時的備援，即使是「沒有選項」的單一商品也支援）
+    3. 文字關鍵字比對（最後手段）
+    """
     button_results, missing_names = _check_availability_via_buttons_only(html, product_names, is_single)
 
     if not missing_names:
@@ -139,13 +152,21 @@ def check_availability(html: str, product_names, expected_sale_id=None, is_singl
         missing_names = [n for n in missing_names if n not in json_results]
 
     if missing_names:
-        log.warning("__NEXT_DATA__ 也沒有資料，改用文字關鍵字比對", missing_names)
+        log.warning("__NEXT_DATA__ 也沒有「%s」的資料，改用文字關鍵字比對（最後手段，可能不準確）", missing_names)
         for name in missing_names:
             button_results[name] = _check_availability_by_keyword_fallback(html, name, is_single)
 
     return button_results
 
+
 def _check_availability_via_next_data(html: str, product_names, expected_sale_id=None, is_single=False):
+    """
+    解析 __NEXT_DATA__ JSON。
+
+    重要：候選資料的篩選條件用「有沒有 status/saleId 欄位」而不是「有沒有 options 陣列」，
+    因為單一商品（沒有款式選項）的資料本來就不會有 options 陣列，如果篩選條件寫死要求
+    options 存在，會導致單一商品永遠找不到候選資料、JSON 備援形同虛設。
+    """
     try:
         soup = BeautifulSoup(html, "html.parser")
         script = soup.find("script", id="__NEXT_DATA__")
@@ -160,19 +181,21 @@ def _check_availability_via_next_data(html: str, product_names, expected_sale_id
             key = q.get("queryKey") or []
             if key and isinstance(key[0], str) and key[0].startswith("GET:/api/v1/sales/"):
                 data = (q.get("state") or {}).get("data") or {}
+                # 用 status 欄位是否存在來判斷「這是不是商品詳細資料」，
+                # 不要求一定要有 options（單一商品沒有 options 是正常的）
+                if "status" not in data:
+                    continue
                 option_block = data.get("option") or {}
-                if option_block.get("options"):
-                    query_sale_id = None
-                    if len(key) > 1 and isinstance(key[1], dict):
-                        query_sale_id = key[1].get("saleId")
-                    data_sale_id = data.get("saleId")
-                    overall_status = data.get("status")
-                    candidates.append(
-                        (str(query_sale_id) if query_sale_id is not None else None,
-                         str(data_sale_id) if data_sale_id is not None else None,
-                         option_block["options"],
-                         overall_status)
-                    )
+                query_sale_id = None
+                if len(key) > 1 and isinstance(key[1], dict):
+                    query_sale_id = key[1].get("saleId")
+                data_sale_id = data.get("saleId")
+                candidates.append(
+                    (str(query_sale_id) if query_sale_id is not None else None,
+                     str(data_sale_id) if data_sale_id is not None else None,
+                     option_block.get("options") or [],
+                     data.get("status"))
+                )
 
         if not candidates:
             return None
@@ -185,18 +208,31 @@ def _check_availability_via_next_data(html: str, product_names, expected_sale_id
                     options = opts
                     overall_status = status
                     break
-            if options is None:
+            if overall_status is None:
+                log.warning(
+                    "__NEXT_DATA__ 裡找到 %d 筆商品資料，但沒有一筆的商品編號跟網址（%s）相符，"
+                    "改用文字關鍵字比對備援，避免抓到別的商品的庫存狀態",
+                    len(candidates), expected_sale_id,
+                )
                 return None
         else:
             options = candidates[0][2]
             overall_status = candidates[0][3]
 
+        # 商品整體如果不是「販售中」，一律視為全部不可購買
         if overall_status != "SALE":
+            log.info("商品整體狀態為「%s」（不是 SALE），視為不可購買", overall_status)
             return {name: False for name in product_names}
 
-        # 若是單一商品且 overall_status 為 SALE，就代表有貨
         if is_single:
-            return {name: True for name in product_names}
+            # 單一商品：如果有拿到選項資料（有些單一商品其實內部仍有一個預設選項），
+            # 用該選項自己的 isSoldOut 判斷，比只看整體狀態更保守可靠；
+            # 如果完全沒有選項資料，才單純依賴整體狀態 = SALE 判斷為有貨。
+            if options:
+                is_available = any(not opt.get("isSoldOut", True) for opt in options)
+            else:
+                is_available = True
+            return {name: is_available for name in product_names}
 
         name_to_status = {}
         for opt in options:
@@ -213,35 +249,39 @@ def _check_availability_via_next_data(html: str, product_names, expected_sale_id
 
         return results
     except Exception as e:
-        log.warning("解析 __NEXT_DATA__ 時發生例外：%s", e)
+        log.warning("解析 __NEXT_DATA__ 時發生例外（改用備援）：%s", e)
         return None
 
+
 def _check_availability_via_buttons_only(html: str, product_names, is_single=False):
+    """
+    主要判斷方式：讀取 <button> 的 disabled 屬性。
+    回傳 (results, missing_names)。
+    """
     soup = BeautifulSoup(html, "html.parser")
     results = {}
     missing_names = []
 
-    # 針對單一商品的按鈕判斷邏輯
     if is_single:
+        # 單一商品：找「文字裡包含購買關鍵字」的按鈕（涵蓋中英文），
+        # 只要找到任何一個符合的按鈕就採用它的 disabled 狀態。
         buy_button_found = False
         is_available = False
         for btn in soup.find_all("button"):
             text = btn.get_text(strip=True).lower()
-            # 只要按鈕文字包含 purchase、buy now 等關鍵字，就認定它是購買按鈕
             if any(kw in text for kw in AVAILABLE_KEYWORDS):
                 buy_button_found = True
                 is_available = not btn.has_attr("disabled")
                 break
-        
+
         if buy_button_found:
             for name in product_names:
                 results[name] = is_available
         else:
-            for name in product_names:
-                missing_names.append(name)
+            missing_names.extend(product_names)
         return results, missing_names
 
-    # 原始多款式商品的按鈕判斷邏輯
+    # 一般多款式商品：依商品名稱比對按鈕文字
     text_to_buttons: dict[str, list] = {}
     for btn in soup.find_all("button"):
         text = btn.get_text(strip=True)
@@ -258,14 +298,20 @@ def _check_availability_via_buttons_only(html: str, product_names, is_single=Fal
 
     return results, missing_names
 
-def _check_availability_by_keyword_fallback(html: str, name: str, is_single=False) -> bool:
-    if is_single:
-        # 針對單一商品，因為沒有特定名稱可以比對位置，為了避免誤判 header/footer 的關鍵字，退回 False 交給安全機制處理
-        return False
-        
+
+def _check_availability_by_keyword_fallback(html: str, name: str, is_single: bool = False) -> bool:
+    """最後手段的文字關鍵字判斷"""
     lower_html = html.lower()
+
+    if is_single:
+        # 單一商品沒有特定名稱可以定位查找範圍，改成用整個頁面判斷
+        has_sold_out = any(kw in lower_html for kw in SOLD_OUT_KEYWORDS)
+        has_available_word = any(kw in lower_html for kw in AVAILABLE_KEYWORDS)
+        return (not has_sold_out) and has_available_word
+
     idx = lower_html.find(name.lower())
     if idx == -1:
+        log.warning("在頁面上完全找不到商品名稱：%s", name)
         return False
 
     start = max(0, idx - 50)
@@ -278,7 +324,7 @@ def _check_availability_by_keyword_fallback(html: str, name: str, is_single=Fals
 
 
 # ------------------------------------------------------------------
-# 狀態儲存（避免重複通知）
+# 狀態儲存
 # ------------------------------------------------------------------
 
 def load_previous_state() -> dict:
@@ -289,28 +335,41 @@ def load_previous_state() -> dict:
             log.warning("讀取 state.json 失敗，視為空白狀態重新開始")
     return {}
 
+
 def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
+
 # ------------------------------------------------------------------
-# 通知函式
+# 通知函式（保留錯誤 log，方便之後除錯，不再整段吞掉例外）
 # ------------------------------------------------------------------
 
 def notify_discord(message: str) -> None:
-    if not DISCORD_WEBHOOK_URL: return
+    if not DISCORD_WEBHOOK_URL:
+        return
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"content": message}, timeout=10)
-    except: pass
+        resp = requests.post(DISCORD_WEBHOOK_URL, json={"content": message}, timeout=10)
+        if resp.status_code >= 300:
+            log.error("Discord 通知失敗：%s %s", resp.status_code, resp.text)
+    except Exception as e:
+        log.error("Discord 通知發生例外：%s", e)
+
 
 def notify_telegram(message: str) -> None:
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=10)
-    except: pass
+        resp = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=10)
+        if resp.status_code >= 300:
+            log.error("Telegram 通知失敗：%s %s", resp.status_code, resp.text)
+    except Exception as e:
+        log.error("Telegram 通知發生例外：%s", e)
+
 
 def notify_gmail(subject: str, message: str) -> None:
-    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD or not GMAIL_TO: return
+    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD or not GMAIL_TO:
+        return
     try:
         msg = MIMEText(message, "plain", "utf-8")
         msg["Subject"] = subject
@@ -320,12 +379,15 @@ def notify_gmail(subject: str, message: str) -> None:
             server.starttls()
             server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
             server.sendmail(GMAIL_ADDRESS, [GMAIL_TO], msg.as_string())
-    except: pass
+    except Exception as e:
+        log.error("Gmail 通知發生例外：%s", e)
+
 
 def send_to_all_channels(message: str, subject: str = "Weverse 商品開賣通知") -> None:
     notify_discord(message)
     notify_telegram(message)
     notify_gmail(subject, message)
+
 
 def build_status_message(page: dict, current_state: dict, newly_available: list, header: str = None) -> str:
     title = header if header else f"📦 {page['label']}"
@@ -333,7 +395,7 @@ def build_status_message(page: dict, current_state: dict, newly_available: list,
     for name in page["products"]:
         is_available = current_state.get(name, False)
         status_text = "✅ 有貨" if is_available else "❌ 缺貨"
-        lines.append(f"{status_text }：{name}")
+        lines.append(f"{status_text}：{name}")
     if newly_available:
         lines.append("")
         for name in newly_available:
@@ -351,7 +413,7 @@ def build_status_message(page: dict, current_state: dict, newly_available: list,
 def check_one_page(page: dict, all_previous_state: dict) -> dict:
     url = page["url"]
     label = page["label"]
-    is_single = page.get("is_single", False) # 讀取是否為單一商品標籤
+    is_single = page.get("is_single", False)
 
     try:
         html = fetch_page_html(url)
@@ -360,10 +422,9 @@ def check_one_page(page: dict, all_previous_state: dict) -> dict:
         return all_previous_state.get(url, {})
 
     current_state = check_availability(
-        html, 
-        page["products"], 
-        expected_sale_id=extract_sale_id_from_url(url), 
-        is_single=is_single
+        html, page["products"],
+        expected_sale_id=extract_sale_id_from_url(url),
+        is_single=is_single,
     )
 
     is_first_run_for_page = url not in all_previous_state
@@ -399,6 +460,7 @@ def run_once():
 def run_status_report():
     all_previous_state = load_previous_state()
     all_new_state = dict(all_previous_state)
+
     for page in MONITORED_PAGES:
         url = page["url"]
         label = page["label"]
@@ -406,13 +468,13 @@ def run_status_report():
         try:
             html = fetch_page_html(url)
         except Exception as e:
+            log.error("抓取網頁失敗（%s / %s）：%s", label, url, e)
             continue
 
         current_state = check_availability(
-            html, 
-            page["products"], 
-            expected_sale_id=extract_sale_id_from_url(url), 
-            is_single=is_single
+            html, page["products"],
+            expected_sale_id=extract_sale_id_from_url(url),
+            is_single=is_single,
         )
         all_new_state[url] = current_state
 
@@ -421,36 +483,77 @@ def run_status_report():
             log.info("[%s] %-20s -> %s", label, name, status_text)
 
         message = build_status_message(page, current_state, newly_available=[], header=f"🔍 目前庫存查詢：{label}")
+        log.info("[%s] 發送目前庫存狀態查詢結果", label)
         send_to_all_channels(message, subject="Weverse 庫存狀態查詢")
+
     save_state(all_new_state)
 
 
 def run_test_notifications():
-    message = "✅ 測試訊息\n發送時間：" + datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    if DISCORD_WEBHOOK_URL: notify_discord(message)
-    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID: notify_telegram(message)
-    if GMAIL_ADDRESS and GMAIL_APP_PASSWORD and GMAIL_TO: notify_gmail("測試信", message)
+    message = (
+        "✅ 這是一則測試訊息\n\n"
+        "如果你在 Discord / Telegram / Gmail 收到這則訊息，代表這個通知管道設定成功。\n"
+        f"發送時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    sent_any = False
+    if DISCORD_WEBHOOK_URL:
+        log.info("正在發送 Discord 測試訊息...")
+        notify_discord(message)
+        sent_any = True
+    else:
+        log.info("未設定 DISCORD_WEBHOOK_URL，略過 Discord 測試")
+
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        log.info("正在發送 Telegram 測試訊息...")
+        notify_telegram(message)
+        sent_any = True
+    else:
+        log.info("未設定 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID，略過 Telegram 測試")
+
+    if GMAIL_ADDRESS and GMAIL_APP_PASSWORD and GMAIL_TO:
+        log.info("正在發送 Gmail 測試信...")
+        notify_gmail("Weverse 監控程式 - 測試信", message)
+        sent_any = True
+    else:
+        log.info("未設定 Gmail 相關欄位，略過 Gmail 測試")
+
+    if not sent_any:
+        log.warning("三個通知管道都沒有設定任何內容，請檢查 .env 或 GitHub Secrets 是否填寫正確")
+    else:
+        log.info("測試訊息已發送完畢，請到對應的 App / 信箱確認有沒有收到")
 
 
 def main():
     import sys
+
     run_only_once = "--once" in sys.argv
     run_test = "--test" in sys.argv
     run_status = "--status" in sys.argv
 
+    log.info("開始監控 %d 個 Weverse 商品頁面", len(MONITORED_PAGES))
+    for page in MONITORED_PAGES:
+        log.info("  - %s：%s", page["label"], page["url"])
+
     if run_test:
+        log.info("以 --test 模式執行（只發測試通知，不檢查商品頁面）")
         run_test_notifications()
         return
+
     if run_status:
+        log.info("以 --status 模式執行（直接查詢並回報目前庫存狀態）")
         run_status_report()
         return
+
     if run_only_once:
+        log.info("以 --once 模式執行（只檢查一次）")
         run_once()
         return
 
+    log.info("每 %d 秒（%.1f 分鐘）檢查一次（本機常駐模式）", CHECK_INTERVAL_SECONDS, CHECK_INTERVAL_SECONDS / 60)
     while True:
         run_once()
         time.sleep(CHECK_INTERVAL_SECONDS)
+
 
 if __name__ == "__main__":
     main()
