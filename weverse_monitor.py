@@ -77,6 +77,12 @@ MONITORED_PAGES = [
         "is_single": True,
         "products": ["手鍊"],
     },
+    {
+        "url": "https://shop.weverse.io/en/shop/KRW/artists/255/sales/63956",
+        "label": "商品頁 63957（單一商品）",
+        "is_single": True,
+        "products": ["手燈"],
+    },
 ]
 
 CHECK_INTERVAL_SECONDS = 15 * 60  # 15 分鐘
