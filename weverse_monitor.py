@@ -126,14 +126,35 @@ HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,ja;q=0.8",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 
-def fetch_page_html(url: str) -> str:
-    resp = requests.get(url, headers=HEADERS, timeout=20)
-    resp.raise_for_status()
-    return resp.text
+def fetch_page_html(url: str, timeout: int = 30, retries: int = 2) -> str:
+    """
+    抓取網頁原始碼。加了重試機制：第一次失敗（逾時、連線問題等）不會馬上放棄，
+    會再等幾秒重試，最多重試 retries 次，減少偶發的網路問題或網站暫時回應慢
+    造成誤判成「抓不到」的機率。
+    """
+    last_exception = None
+    for attempt in range(retries + 1):
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=timeout)
+            resp.raise_for_status()
+            return resp.text
+        except Exception as e:
+            last_exception = e
+            if attempt < retries:
+                log.warning(
+                    "抓取網頁失敗（第 %d/%d 次嘗試），5 秒後重試：%s",
+                    attempt + 1, retries + 1, e,
+                )
+                time.sleep(5)
+    raise last_exception
 
 
 # ------------------------------------------------------------------
