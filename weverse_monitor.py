@@ -345,24 +345,68 @@ def _check_availability_by_keyword_fallback(html: str, name: str, is_single: boo
 # 如果只看 disabled 屬性會誤判成有貨。
 MUJI_ADD_TO_CART_TEXT = "カートに入れる"
 
+# MUJI 網頁原始碼裡，Next.js 會把資料內嵌成類似
+#   "productDetailCartButton":{"__typename":"ProductDetailCartActionButton","text":"在庫なし","type":"NoStock"}
+# 這樣的文字直接寫在 <script> 標籤裡（伺服器端就已經算好的最終結果，不需要等瀏覽器執行
+# JavaScript 才會出現）。這個規則式比對用來抓出這段資料裡的 text 欄位。
+_MUJI_CART_BUTTON_PATTERN = re.compile(
+    r'"productDetailCartButton"\s*:\s*\{[^}]*?"text"\s*:\s*"([^"]*)"[^}]*?"type"\s*:\s*"([^"]*)"'
+)
+
 
 def check_muji_availability(html: str):
     """
     回傳 True / False / None：
-      True  -> 確定有貨（按鈕文字剛好是「カートに入れる」且沒有 disabled）
-      False -> 確定沒貨（按鈕是「在庫なし」、「再入荷の通知を受け取る」，或雖然是
-                加入購物車文字但被標記 disabled）
-      None  -> 頁面上完全找不到這顆按鈕，無法判斷（可能網站改版了）
+      True  -> 確定有貨
+      False -> 確定沒貨（在庫なし、再入荷の通知を受け取る等）
+      None  -> 完全找不到判斷依據（可能網站改版了）
 
-    ⚠️ 提醒：這個判斷只能反映「網頁當下顯示的狀態」，跟「結帳當下是否真的還有貨」
-    中間一定會有時間差，熱門商品仍然可能發生「畫面顯示可買、結帳卻說沒貨」的情況，
-    這是任何監控方式都無法完全避免的限制。
+    判斷順序：
+    1. 【最可靠】解析網頁原始碼裡內嵌的 productDetailCartButton 資料，這是伺服器端
+       已經算好的最終結果，不受「畫面還沒載入完成」影響。
+    2. 【備援】上面找不到時，才退回讀取 <button id="products_cart"> 的文字內容跟
+       disabled 屬性（有可能受頁面載入時機影響，可靠度較低）。
+
+    ⚠️ 提醒：這個判斷只能反映「網站當下算出的狀態」，跟「結帳當下是否真的還有貨」
+    中間仍然可能有極短暫的時間差，熱門商品仍然可能發生「查詢時有貨、結帳時沒貨」的
+    情況，這是任何監控方式都無法完全避免的限制。
     """
+    json_result = _check_muji_via_embedded_json(html)
+    if json_result is not None:
+        return json_result
+
+    log.warning("找不到 MUJI 內嵌的 productDetailCartButton 資料，改用按鈕 DOM 判斷備援")
+    return _check_muji_via_buttons(html)
+
+
+def _check_muji_via_embedded_json(html: str):
+    """從網頁原始碼裡直接用規則比對抓出 productDetailCartButton 的 text 欄位"""
+    try:
+        # 這段資料在原始碼裡的引號有時候會被跳脫成 \"，統一還原成一般引號再比對
+        cleaned = html.replace('\\"', '"')
+        match = _MUJI_CART_BUTTON_PATTERN.search(cleaned)
+        if not match:
+            return None
+
+        raw_text = match.group(1)
+        try:
+            # 網頁原始碼裡的中日文字通常會被編碼成 \uXXXX，這裡解碼還原成正常文字
+            decoded_text = raw_text.encode().decode("unicode_escape")
+        except Exception:
+            decoded_text = raw_text
+
+        return decoded_text.strip() == MUJI_ADD_TO_CART_TEXT
+    except Exception as e:
+        log.warning("解析 MUJI 內嵌 JSON 時發生例外（改用備援）：%s", e)
+        return None
+
+
+def _check_muji_via_buttons(html: str):
+    """備援：讀取 <button id="products_cart"> 的文字內容跟 disabled 屬性"""
     soup = BeautifulSoup(html, "html.parser")
 
     buttons = soup.find_all("button", id="products_cart")
     if not buttons:
-        # 找不到固定 id，退回用文字內容找可能的候選按鈕
         buttons = [
             b for b in soup.find_all("button")
             if MUJI_ADD_TO_CART_TEXT in b.get_text() or "在庫なし" in b.get_text()
