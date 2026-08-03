@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-商品到貨/開賣通知程式（Weverse Shop + MUJI 官網）
+Weverse Shop 商品到貨/開賣通知程式（支援同時監控多個商品頁面，含單一商品/無選項商品）
 =====================================
 """
 
@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 # ------------------------------------------------------------------
-# 基本設定：想追蹤的 Weverse 商品頁面清單
+# 基本設定：想追蹤的商品頁面清單
 # ------------------------------------------------------------------
 
 load_dotenv()
@@ -29,7 +29,8 @@ load_dotenv()
 #   url        -> 商品頁面網址
 #   label      -> 顯示名稱
 #   products   -> 要追蹤的商品名稱清單（is_single=True 時，放一個你自己取的名字即可）
-#   is_single  -> True 代表這是「沒有款式選項、只有一個購買按鈕」的單一商品
+#   is_single  -> True 代表這是「沒有款式選項、只有一個購買按鈕」的單一商品（僅限 Weverse）
+#   site       -> "weverse"（預設，可省略）或 "muji"，決定用哪一套判斷邏輯
 MONITORED_PAGES = [
     {
         "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/43782",
@@ -72,37 +73,13 @@ MONITORED_PAGES = [
         "products": ["綠綠專"],
     },
     {
-        "url": "https://shop.weverse.io/en/shop/KRW/artists/255/sales/60324",
-        "label": "商品頁 60324（單一商品）",
-        "is_single": True,
-        "products": ["手鍊"],
-    },
-    {
-        "url": "https://shop.weverse.io/en/shop/KRW/artists/255/sales/63956",
-        "label": "商品頁 63957（單一商品）",
-        "is_single": True,
-        "products": ["手燈"],
-    },
-]
-
-# ------------------------------------------------------------------
-# 基本設定：想追蹤的 MUJI 官網商品頁面清單
-# ------------------------------------------------------------------
-
-# 每一個項目：
-#   url    -> 商品詳情頁網址（一個網址代表一個特定顏色/款式的商品）
-#   label  -> 顯示名稱，方便自己辨識（可以附上顏色/尺寸）
-MUJI_MONITORED_PAGES = [
-    {
         "url": "https://www.muji.com/jp/ja/store/cmdty/detail/4550584920738",
-        "label": "立体メッシュ持ち手付き巾着（黒 S）",
+        "label": "MUJI 商品 4550584920738",
+        "site": "muji",
+        "products": ["MUJI 商品"],
     },
-    # 如果還要追蹤別的顏色/商品，複製一組貼在這裡即可，例如：
-    # {
-    #     "url": "https://www.muji.com/jp/ja/store/cmdty/detail/4547315931682",
-    #     "label": "立体メッシュ持ち手付き巾着（グレー S）",
-    # },
 ]
+
 
 CHECK_INTERVAL_SECONDS = 15 * 60  # 15 分鐘
 
@@ -111,8 +88,8 @@ TAIWAN_TZ = timezone(timedelta(hours=8))  # 通知訊息裡的時間一律顯示
 STATE_FILE = Path(__file__).parent / "state.json"
 LOG_FILE = Path(__file__).parent / "monitor.log"
 
-SOLD_OUT_KEYWORDS = ["sold out", "품절", "매진", "售罄", "已售完", "暫無庫存", "缺貨", "在庫なし"]
-AVAILABLE_KEYWORDS = ["add to cart", "purchase", "buy now", "購買", "加入購物車", "立即購買", "カートに入れる"]
+SOLD_OUT_KEYWORDS = ["sold out", "품절", "매진", "售罄", "已售完", "暫無庫存", "缺貨"]
+AVAILABLE_KEYWORDS = ["add to cart", "purchase", "buy now", "購買", "加入購物車", "立即購買"]
 CONTEXT_WINDOW = 300
 
 # ------------------------------------------------------------------
@@ -140,14 +117,14 @@ logging.basicConfig(
         logging.StreamHandler(),
     ],
 )
-log = logging.getLogger("monitor")
+log = logging.getLogger("weverse_monitor")
 
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "en-US,en;q=0.9,ja;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 
@@ -158,7 +135,7 @@ def fetch_page_html(url: str) -> str:
 
 
 # ------------------------------------------------------------------
-# 判斷各商品的可購買狀態（Weverse）
+# 判斷各商品的可購買狀態
 # ------------------------------------------------------------------
 
 def extract_sale_id_from_url(url: str):
@@ -357,145 +334,47 @@ def _check_availability_by_keyword_fallback(html: str, name: str, is_single: boo
 
 
 # ------------------------------------------------------------------
-# 判斷商品的可購買狀態（MUJI）
+# MUJI 專用判斷邏輯
 # ------------------------------------------------------------------
 
-# MUJI 商品詳情頁雖然是 Next.js 網站，但「純 HTTP 抓取（不執行 JS）」拿到的原始碼
-# 裡面其實已經包含了好幾個伺服器端就算好、寫死的庫存狀態標記；只有「カートに入れる」
-# 按鈕本身在 hydration 完成前會顯示 loading 過渡樣式（class 裡有 isLoading），不能拿
-# 按鈕的文字/disabled 屬性當作唯一依據。判斷順序：
-#   1. Schema.org 結構化資料（給 Google 用的標準 SEO 標記，幾乎不會被改版動到）
-#        "offers":{...,"availability":"https://schema.org/InStock"...}
-#   2. 頁面上一顆專門的隱藏庫存旗標
-#        <span id="stock_status" class="STOCK"></span>
-#   3. Next.js RSC 資料流裡的 inventoryStatus 欄位
-#        "inventoryStatus":"STOCK","canDisplayShopStock":true,...
-#   4. 最後手段：解析「カートに入れる」按鈕文字/disabled（可能因為 isLoading 過渡
-#      樣式而誤判，僅在上面三種都抓不到時才使用）
-_MUJI_SCHEMA_AVAILABILITY_RE = re.compile(
-    r'"availability":"https?://schema\.org/(\w+)"'
-)
-_MUJI_STOCK_STATUS_SPAN_RE = re.compile(
-    r'<span[^>]*id="stock_status"[^>]*class="([^"]*)"'
-)
-_MUJI_INVENTORY_STATUS_RE = re.compile(
-    r'"inventoryStatus":"(\w+)"\s*,\s*"canDisplayShopStock"'
-)
-
-# 依照 MUJI 網站慣例，這些值代表有貨；其餘一律視為缺貨。
-_MUJI_AVAILABLE_STATUS_VALUES = {"STOCK", "INSTOCK"}
+# MUJI 商品頁的「加入購物車」按鈕，只有文字完全是這個才代表真的能買。
+# 注意：不能只看按鈕「能不能點」，因為缺貨時常常會出現另一顆同樣可以點擊、
+# 但其實是「訂閱補貨通知」的按鈕（文字是「再入荷の通知を受け取る」），
+# 如果只看 disabled 屬性會誤判成有貨。
+MUJI_ADD_TO_CART_TEXT = "カートに入れる"
 
 
 def check_muji_availability(html: str):
     """
-    回傳 True（有貨）/ False（缺貨）/ None（判斷不出來，本次先略過、不覆蓋舊狀態）
+    回傳 True / False / None：
+      True  -> 確定有貨（按鈕文字剛好是「カートに入れる」且沒有 disabled）
+      False -> 確定沒貨（按鈕是「在庫なし」、「再入荷の通知を受け取る」，或雖然是
+                加入購物車文字但被標記 disabled）
+      None  -> 頁面上完全找不到這顆按鈕，無法判斷（可能網站改版了）
+
+    ⚠️ 提醒：這個判斷只能反映「網頁當下顯示的狀態」，跟「結帳當下是否真的還有貨」
+    中間一定會有時間差，熱門商品仍然可能發生「畫面顯示可買、結帳卻說沒貨」的情況，
+    這是任何監控方式都無法完全避免的限制。
     """
-    # 方法一：Schema.org 結構化資料（最標準、最不容易因改版而失效）
-    match = _MUJI_SCHEMA_AVAILABILITY_RE.search(html)
-    if match:
-        status = match.group(1).upper()
-        is_available = status in _MUJI_AVAILABLE_STATUS_VALUES
-        log.info("MUJI 頁面 Schema.org availability = %s（%s）", status, "有貨" if is_available else "缺貨")
-        return is_available
+    soup = BeautifulSoup(html, "html.parser")
 
-    # 方法二：頁面上專用的隱藏庫存旗標 <span id="stock_status" class="...">
-    match = _MUJI_STOCK_STATUS_SPAN_RE.search(html)
-    if match:
-        status = match.group(1).strip().upper()
-        if status:
-            is_available = status in _MUJI_AVAILABLE_STATUS_VALUES
-            log.info("MUJI 頁面 stock_status 標記 = %s（%s）", status, "有貨" if is_available else "缺貨")
-            return is_available
+    buttons = soup.find_all("button", id="products_cart")
+    if not buttons:
+        # 找不到固定 id，退回用文字內容找可能的候選按鈕
+        buttons = [
+            b for b in soup.find_all("button")
+            if MUJI_ADD_TO_CART_TEXT in b.get_text() or "在庫なし" in b.get_text()
+        ]
 
-    # 方法三：Next.js RSC 資料流裡的 inventoryStatus 欄位
-    match = _MUJI_INVENTORY_STATUS_RE.search(html)
-    if match:
-        status = match.group(1)
-        is_available = status in _MUJI_AVAILABLE_STATUS_VALUES
-        log.info("MUJI 頁面 inventoryStatus 欄位 = %s（%s）", status, "有貨" if is_available else "缺貨")
-        return is_available
+    if not buttons:
+        return None
 
-    log.warning("MUJI 頁面找不到 Schema.org / stock_status / inventoryStatus 任何一種標記，改用購買按鈕文字備援判斷（可能不準確）")
+    for btn in buttons:
+        text = btn.get_text(strip=True)
+        if text == MUJI_ADD_TO_CART_TEXT and not btn.has_attr("disabled"):
+            return True
 
-    # 方法四（最後手段，可能因按鈕的 isLoading 過渡樣式而誤判）：
-    # 解析「カートに入れる」按鈕的 disabled 屬性與文字
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        btn = soup.find("button", id="products_cart")
-        if btn is not None:
-            text = btn.get_text(strip=True)
-            is_disabled = btn.has_attr("disabled")
-            if "在庫なし" in text or is_disabled:
-                return False
-            if "カートに入れる" in text:
-                return True
-    except Exception as e:
-        log.warning("解析 MUJI 購買按鈕時發生例外：%s", e)
-
-    # 方法五（更後段的最後手段）：純文字關鍵字比對
-    lower_html = html.lower()
-    has_sold_out = "在庫なし" in html or any(kw in lower_html for kw in SOLD_OUT_KEYWORDS)
-    has_available_word = "カートに入れる" in html or any(kw in lower_html for kw in AVAILABLE_KEYWORDS)
-    if has_sold_out:
-        return False
-    if has_available_word:
-        return True
-
-    log.warning("MUJI 頁面完全無法判斷庫存狀態，本次先略過")
-    return None
-
-
-def build_muji_status_message(page: dict, is_available: bool, header: str = None) -> str:
-    title = header if header else f"🛍️ {page['label']}"
-    status_text = "✅ 有貨" if is_available else "❌ 缺貨"
-    lines = [title, "", status_text]
-    if is_available:
-        lines.append("")
-        lines.append("🎉 補貨了！")
-    lines.append("")
-    lines.append(page["url"])
-    lines.append(datetime.now(TAIWAN_TZ).strftime("偵測時間：%Y-%m-%d %H:%M:%S"))
-    return "\n".join(lines)
-
-
-# MUJI 的 state 存在同一份 state.json 裡，用 "muji::網址" 當 key，
-# 避免跟 Weverse 那邊用「網址」當 key 的資料互相打架。
-def _muji_state_key(url: str) -> str:
-    return f"muji::{url}"
-
-
-def check_one_muji_page(page: dict, all_previous_state: dict) -> dict:
-    url = page["url"]
-    label = page["label"]
-    key = _muji_state_key(url)
-
-    try:
-        html = fetch_page_html(url)
-    except Exception as e:
-        log.error("抓取 MUJI 網頁失敗（%s / %s）：%s", label, url, e)
-        return all_previous_state.get(key, {})
-
-    is_available = check_muji_availability(html)
-
-    if is_available is None:
-        # 這次判斷不出來，維持原本的狀態，不發通知、也不覆蓋掉舊資料
-        return all_previous_state.get(key, {})
-
-    previous_state_for_page = all_previous_state.get(key, {})
-    was_available = previous_state_for_page.get("available", False)
-    is_first_run_for_page = key not in all_previous_state
-
-    status_text = "可購買" if is_available else "不可購買/缺貨"
-    log.info("[MUJI][%s] -> %s", label, status_text)
-
-    if is_first_run_for_page:
-        log.info("[MUJI][%s] 第一次檢查這個頁面，記錄目前狀態作為基準值，不發送補貨通知", label)
-    elif is_available and not was_available:
-        message = build_muji_status_message(page, is_available)
-        log.info("[MUJI][%s] 偵測到補貨，發送通知", label)
-        send_to_all_channels(message, subject="MUJI 補貨通知")
-
-    return {"available": is_available}
+    return False
 
 
 # ------------------------------------------------------------------
@@ -558,7 +437,7 @@ def notify_gmail(subject: str, message: str) -> None:
         log.error("Gmail 通知發生例外：%s", e)
 
 
-def send_to_all_channels(message: str, subject: str = "商品開賣/補貨通知") -> None:
+def send_to_all_channels(message: str, subject: str = "Weverse 商品開賣通知") -> None:
     notify_discord(message)
     notify_telegram(message)
     notify_gmail(subject, message)
@@ -582,13 +461,31 @@ def build_status_message(page: dict, current_state: dict, newly_available: list,
 
 
 # ------------------------------------------------------------------
-# 主流程（Weverse）
+# 主流程
 # ------------------------------------------------------------------
+
+def get_current_state_for_page(page: dict, html: str) -> dict:
+    """依照 page["site"] 分流到對應網站的判斷邏輯，統一回傳 {商品名稱: True/False}"""
+    site = page.get("site", "weverse")
+
+    if site == "muji":
+        product_name = page["products"][0]
+        is_available = check_muji_availability(html)
+        if is_available is None:
+            log.warning("[%s] 找不到 MUJI 加入購物車按鈕，可能網站改版了，暫時視為不可購買", page["label"])
+            is_available = False
+        return {product_name: is_available}
+
+    return check_availability(
+        html, page["products"],
+        expected_sale_id=extract_sale_id_from_url(page["url"]),
+        is_single=page.get("is_single", False),
+    )
+
 
 def check_one_page(page: dict, all_previous_state: dict) -> dict:
     url = page["url"]
     label = page["label"]
-    is_single = page.get("is_single", False)
 
     try:
         html = fetch_page_html(url)
@@ -596,11 +493,7 @@ def check_one_page(page: dict, all_previous_state: dict) -> dict:
         log.error("抓取網頁失敗（%s / %s）：%s", label, url, e)
         return all_previous_state.get(url, {})
 
-    current_state = check_availability(
-        html, page["products"],
-        expected_sale_id=extract_sale_id_from_url(url),
-        is_single=is_single,
-    )
+    current_state = get_current_state_for_page(page, html)
 
     is_first_run_for_page = url not in all_previous_state
     previous_state_for_page = all_previous_state.get(url, {})
@@ -624,21 +517,11 @@ def check_one_page(page: dict, all_previous_state: dict) -> dict:
     return current_state
 
 
-# ------------------------------------------------------------------
-# 主流程（整合 Weverse + MUJI）
-# ------------------------------------------------------------------
-
 def run_once():
     all_previous_state = load_previous_state()
     all_new_state = dict(all_previous_state)
-
     for page in MONITORED_PAGES:
         all_new_state[page["url"]] = check_one_page(page, all_previous_state)
-
-    for page in MUJI_MONITORED_PAGES:
-        key = _muji_state_key(page["url"])
-        all_new_state[key] = check_one_muji_page(page, all_previous_state)
-
     save_state(all_new_state)
 
 
@@ -649,18 +532,13 @@ def run_status_report():
     for page in MONITORED_PAGES:
         url = page["url"]
         label = page["label"]
-        is_single = page.get("is_single", False)
         try:
             html = fetch_page_html(url)
         except Exception as e:
             log.error("抓取網頁失敗（%s / %s）：%s", label, url, e)
             continue
 
-        current_state = check_availability(
-            html, page["products"],
-            expected_sale_id=extract_sale_id_from_url(url),
-            is_single=is_single,
-        )
+        current_state = get_current_state_for_page(page, html)
         all_new_state[url] = current_state
 
         for name, is_available in current_state.items():
@@ -670,30 +548,6 @@ def run_status_report():
         message = build_status_message(page, current_state, newly_available=[], header=f"🔍 目前庫存查詢：{label}")
         log.info("[%s] 發送目前庫存狀態查詢結果", label)
         send_to_all_channels(message, subject="Weverse 庫存狀態查詢")
-
-    for page in MUJI_MONITORED_PAGES:
-        url = page["url"]
-        label = page["label"]
-        key = _muji_state_key(url)
-        try:
-            html = fetch_page_html(url)
-        except Exception as e:
-            log.error("抓取 MUJI 網頁失敗（%s / %s）：%s", label, url, e)
-            continue
-
-        is_available = check_muji_availability(html)
-        if is_available is None:
-            log.warning("[MUJI][%s] 查詢時無法判斷庫存狀態，跳過本次回報", label)
-            continue
-
-        all_new_state[key] = {"available": is_available}
-
-        status_text = "可購買" if is_available else "不可購買/缺貨"
-        log.info("[MUJI][%s] -> %s", label, status_text)
-
-        message = build_muji_status_message(page, is_available, header=f"🔍 目前庫存查詢：{label}")
-        log.info("[MUJI][%s] 發送目前庫存狀態查詢結果", label)
-        send_to_all_channels(message, subject="MUJI 庫存狀態查詢")
 
     save_state(all_new_state)
 
@@ -721,7 +575,7 @@ def run_test_notifications():
 
     if GMAIL_ADDRESS and GMAIL_APP_PASSWORD and GMAIL_TO:
         log.info("正在發送 Gmail 測試信...")
-        notify_gmail("監控程式 - 測試信", message)
+        notify_gmail("Weverse 監控程式 - 測試信", message)
         sent_any = True
     else:
         log.info("未設定 Gmail 相關欄位，略過 Gmail 測試")
@@ -739,11 +593,9 @@ def main():
     run_test = "--test" in sys.argv
     run_status = "--status" in sys.argv
 
-    log.info("開始監控 %d 個 Weverse 商品頁面、%d 個 MUJI 商品頁面", len(MONITORED_PAGES), len(MUJI_MONITORED_PAGES))
+    log.info("開始監控 %d 個 Weverse 商品頁面", len(MONITORED_PAGES))
     for page in MONITORED_PAGES:
-        log.info("  - [Weverse] %s：%s", page["label"], page["url"])
-    for page in MUJI_MONITORED_PAGES:
-        log.info("  - [MUJI] %s：%s", page["label"], page["url"])
+        log.info("  - %s：%s", page["label"], page["url"])
 
     if run_test:
         log.info("以 --test 模式執行（只發測試通知，不檢查商品頁面）")
