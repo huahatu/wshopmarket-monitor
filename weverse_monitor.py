@@ -73,6 +73,18 @@ MONITORED_PAGES = [
         "products": ["綠綠專"],
     },
     {
+        "url": "https://shop.weverse.io/en/shop/KRW/artists/255/sales/63956",
+        "label": "商品頁 63956（單一商品）",
+        "is_single": True,
+        "products": ["手燈"],
+    },
+    {
+        "url": "https://shop.weverse.io/en/shop/KRW/artists/255/sales/60324",
+        "label": "商品頁 60324（單一商品）",
+        "is_single": True,
+        "products": ["手鍊"],
+    },
+    {
         "url": "https://www.muji.com/jp/ja/store/cmdty/detail/4550584920738",
         "label": "MUJI 商品 4550584920738",
         "site": "muji",
