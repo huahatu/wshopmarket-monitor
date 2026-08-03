@@ -84,12 +84,14 @@ MONITORED_PAGES = [
         "is_single": True,
         "products": ["手鍊"],
     },
-    {
-        "url": "https://www.muji.com/jp/ja/store/cmdty/detail/4550584920738",
-        "label": "MUJI 商品 4550584920738",
-        "site": "muji",
-        "products": ["MUJI 商品"],
-    },
+    # 暫時停用：MUJI 網站對雲端 IP 有防護機制，導致 GitHub Actions 抓取一直逾時失敗。
+    # 如果之後想再試，把下面這段貼回 [ ] 裡就好，判斷邏輯（check_muji_availability）都還保留著。
+    # {
+    #     "url": "https://www.muji.com/jp/ja/store/cmdty/detail/4550584920738",
+    #     "label": "MUJI 商品 4550584920738",
+    #     "site": "muji",
+    #     "products": ["MUJI 商品"],
+    # },
 ]
 
 
