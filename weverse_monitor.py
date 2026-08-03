@@ -97,6 +97,8 @@ CONTEXT_WINDOW = 300
 # ------------------------------------------------------------------
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+# 如果想讓 MUJI 商品的通知發到「另一個」Discord 頻道，設定這個；沒填就跟其他通知共用同一個頻道
+DISCORD_WEBHOOK_URL_MUJI = os.getenv("DISCORD_WEBHOOK_URL_MUJI", "").strip()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
@@ -398,11 +400,12 @@ def save_state(state: dict) -> None:
 # 通知函式（保留錯誤 log，方便之後除錯，不再整段吞掉例外）
 # ------------------------------------------------------------------
 
-def notify_discord(message: str) -> None:
-    if not DISCORD_WEBHOOK_URL:
+def notify_discord(message: str, webhook_url: str = None) -> None:
+    url = webhook_url or DISCORD_WEBHOOK_URL
+    if not url:
         return
     try:
-        resp = requests.post(DISCORD_WEBHOOK_URL, json={"content": message}, timeout=10)
+        resp = requests.post(url, json={"content": message}, timeout=10)
         if resp.status_code >= 300:
             log.error("Discord 通知失敗：%s %s", resp.status_code, resp.text)
     except Exception as e:
@@ -437,10 +440,22 @@ def notify_gmail(subject: str, message: str) -> None:
         log.error("Gmail 通知發生例外：%s", e)
 
 
-def send_to_all_channels(message: str, subject: str = "Weverse 商品開賣通知") -> None:
-    notify_discord(message)
+def send_to_all_channels(message: str, subject: str = "Weverse 商品開賣通知", discord_webhook_url: str = None) -> None:
+    """
+    discord_webhook_url：想指定用某個特定 Discord 頻道時傳入，
+    不傳的話就用預設的 DISCORD_WEBHOOK_URL。
+    Telegram / Gmail 目前維持共用同一組設定（沒有分頻道的需求）。
+    """
+    notify_discord(message, webhook_url=discord_webhook_url)
     notify_telegram(message)
     notify_gmail(subject, message)
+
+
+def get_discord_webhook_for_page(page: dict) -> str:
+    """依照商品頁面是哪個網站，決定要用哪一組 Discord Webhook（沒設定專屬的就用預設那組）"""
+    if page.get("site") == "muji" and DISCORD_WEBHOOK_URL_MUJI:
+        return DISCORD_WEBHOOK_URL_MUJI
+    return DISCORD_WEBHOOK_URL
 
 
 def build_status_message(page: dict, current_state: dict, newly_available: list, header: str = None) -> str:
@@ -512,7 +527,7 @@ def check_one_page(page: dict, all_previous_state: dict) -> dict:
     elif newly_available:
         message = build_status_message(page, current_state, newly_available)
         log.info("[%s] 偵測到補貨，發送通知：%s", label, newly_available)
-        send_to_all_channels(message)
+        send_to_all_channels(message, discord_webhook_url=get_discord_webhook_for_page(page))
 
     return current_state
 
@@ -547,7 +562,7 @@ def run_status_report():
 
         message = build_status_message(page, current_state, newly_available=[], header=f"🔍 目前庫存查詢：{label}")
         log.info("[%s] 發送目前庫存狀態查詢結果", label)
-        send_to_all_channels(message, subject="Weverse 庫存狀態查詢")
+        send_to_all_channels(message, subject="Weverse 庫存狀態查詢", discord_webhook_url=get_discord_webhook_for_page(page))
 
     save_state(all_new_state)
 
@@ -565,6 +580,13 @@ def run_test_notifications():
         sent_any = True
     else:
         log.info("未設定 DISCORD_WEBHOOK_URL，略過 Discord 測試")
+
+    if DISCORD_WEBHOOK_URL_MUJI:
+        log.info("正在發送 Discord（MUJI 專用頻道）測試訊息...")
+        notify_discord(message, webhook_url=DISCORD_WEBHOOK_URL_MUJI)
+        sent_any = True
+    else:
+        log.info("未設定 DISCORD_WEBHOOK_URL_MUJI，略過 MUJI 專用頻道測試")
 
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         log.info("正在發送 Telegram 測試訊息...")
