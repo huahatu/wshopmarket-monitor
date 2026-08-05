@@ -34,7 +34,7 @@ load_dotenv()
 MONITORED_PAGES = [
     {
         "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/43782",
-        "label": "商品頁 43782",
+        "label": "韓版原皮 43782",
         "products": [
             "CHOI YONG MEONG",
             "HWANG CHOON",
@@ -44,7 +44,7 @@ MONITORED_PAGES = [
         ],
     },
     {
-        "url": "https://shop.weverse.io/zh-tw/shop/JPY/artists/3/sales/27792",
+        "url": "https://shop.weverse.io/ja/shop/JPY/artists/3/sales/27792",
         "label": "日本原皮 27792",
         "products": [
             "CHOI YONG MEONG",
