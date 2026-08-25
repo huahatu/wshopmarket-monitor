@@ -34,7 +34,18 @@ load_dotenv()
 MONITORED_PAGES = [
     {
         "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/43782",
-        "label": "商品頁 43782",
+        "label": "原皮",
+        "products": [
+            "CHOI YONG MEONG",
+            "HWANG CHOON",
+            "BAMGEUT",
+            "DA-GO-NYANG",
+            "HHM NYA RING",
+        ],
+    },
+    {
+        "url": "https://shop.weverse.io/ja/shop/JPY/artists/3/sales/27792",
+        "label": "日本原皮",
         "products": [
             "CHOI YONG MEONG",
             "HWANG CHOON",
