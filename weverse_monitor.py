@@ -82,33 +82,39 @@ MONITORED_PAGES = [
     # },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678933",
-        "label": "五大唱片 447455678933",
+        "label": "五大唱片 藍色生日蛋💙",
         "site": "5music",
         "products": ["五大唱片 447455678933"],
     },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678932",
-        "label": "五大唱片 447455678932",
+        "label": "五大唱片 粉色生日蛋💗",
         "site": "5music",
         "products": ["五大唱片 447455678932"],
     },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678935",
-        "label": "五大唱片 447455678935",
+        "label": "五大唱片 白色生日蛋🤍",
         "site": "5music",
         "products": ["五大唱片 447455678935"],
     },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678934",
-        "label": "五大唱片 447455678934",
+        "label": "五大唱片 黃色生日蛋💛",
         "site": "5music",
         "products": ["五大唱片 447455678934"],
     },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678936",
-        "label": "五大唱片 447455678936",
+        "label": "五大唱片 一盒生日蛋💙💗🤍💛",
         "site": "5music",
         "products": ["五大唱片 447455678936"],
+    },
+    {
+        "url": "https://www.5music.com.tw/CDList-C.asp?cdno=447395678624",
+        "label": "五大唱片 防彈手燈💣",
+        "site": "5music",
+        "products": ["五大唱片 447395678624"],
     },
 ]
 
