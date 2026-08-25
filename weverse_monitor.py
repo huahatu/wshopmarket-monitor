@@ -34,18 +34,7 @@ load_dotenv()
 MONITORED_PAGES = [
     {
         "url": "https://shop.weverse.io/en/shop/KRW/artists/3/sales/43782",
-        "label": "韓版原皮 43782",
-        "products": [
-            "CHOI YONG MEONG",
-            "HWANG CHOON",
-            "BAMGEUT",
-            "DA-GO-NYANG",
-            "HHM NYA RING",
-        ],
-    },
-    {
-        "url": "https://shop.weverse.io/ja/shop/JPY/artists/3/sales/27792",
-        "label": "日本原皮 27792",
+        "label": "商品頁 43782",
         "products": [
             "CHOI YONG MEONG",
             "HWANG CHOON",
@@ -83,18 +72,6 @@ MONITORED_PAGES = [
         "is_single": True,
         "products": ["綠綠專"],
     },
-    {
-        "url": "https://shop.weverse.io/en/shop/KRW/artists/255/sales/63956",
-        "label": "商品頁 63956（單一商品）",
-        "is_single": True,
-        "products": ["手燈"],
-    },
-    {
-        "url": "https://shop.weverse.io/en/shop/KRW/artists/255/sales/60324",
-        "label": "商品頁 60324（單一商品）",
-        "is_single": True,
-        "products": ["手鍊"],
-    },
     # 暫時停用：MUJI 網站對雲端 IP 有防護機制，導致 GitHub Actions 抓取一直逾時失敗。
     # 如果之後想再試，把下面這段貼回 [ ] 裡就好，判斷邏輯（check_muji_availability）都還保留著。
     # {
@@ -103,6 +80,36 @@ MONITORED_PAGES = [
     #     "site": "muji",
     #     "products": ["MUJI 商品"],
     # },
+    {
+        "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678933",
+        "label": "五大唱片 447455678933",
+        "site": "5music",
+        "products": ["五大唱片 447455678933"],
+    },
+    {
+        "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678932",
+        "label": "五大唱片 447455678932",
+        "site": "5music",
+        "products": ["五大唱片 447455678932"],
+    },
+    {
+        "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678935",
+        "label": "五大唱片 447455678935",
+        "site": "5music",
+        "products": ["五大唱片 447455678935"],
+    },
+    {
+        "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678934",
+        "label": "五大唱片 447455678934",
+        "site": "5music",
+        "products": ["五大唱片 447455678934"],
+    },
+    {
+        "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678936",
+        "label": "五大唱片 447455678936",
+        "site": "5music",
+        "products": ["五大唱片 447455678936"],
+    },
 ]
 
 
@@ -124,6 +131,14 @@ CONTEXT_WINDOW = 300
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 # 如果想讓 MUJI 商品的通知發到「另一個」Discord 頻道，設定這個；沒填就跟其他通知共用同一個頻道
 DISCORD_WEBHOOK_URL_MUJI = os.getenv("DISCORD_WEBHOOK_URL_MUJI", "").strip()
+DISCORD_WEBHOOK_URL_5MUSIC = os.getenv("DISCORD_WEBHOOK_URL_5MUSIC", "").strip()
+
+# 每個網站對應到哪一組專屬 Discord Webhook（沒填的話，get_discord_webhook_for_page
+# 會自動改用預設的 DISCORD_WEBHOOK_URL），之後要再加新網站，這裡加一行對照即可
+SITE_DISCORD_WEBHOOKS = {
+    "muji": DISCORD_WEBHOOK_URL_MUJI,
+    "5music": DISCORD_WEBHOOK_URL_5MUSIC,
+}
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
@@ -470,6 +485,36 @@ def _check_muji_via_buttons(html: str):
 
 
 # ------------------------------------------------------------------
+# 五大唱片（5music.com.tw）專用判斷邏輯
+# ------------------------------------------------------------------
+
+def check_5music_availability(html: str):
+    """
+    回傳 True / False / None：
+      True  -> 確定有貨（找得到「放入購物車」的按鈕，class 是 btn-cart）
+      False -> 確定沒貨（頁面上出現「(目前無現貨)」文字，且沒有加入購物車按鈕）
+      None  -> 無法判斷，例如網址打錯導致「無此CD資料」，或網站改版兩者都找不到
+
+    五大唱片的判斷方式跟 MUJI 不一樣、更單純：沒貨的時候，「放入購物車」按鈕
+    整個不會出現在網頁上（不是按鈕變成 disabled，是按鈕根本不存在），
+    取而代之的是「(目前無現貨)」這行文字。
+    """
+    if "無此CD資料" in html:
+        log.warning("這個商品編號在五大唱片網站上查無資料（無此CD資料），請確認網址是否正確")
+        return None
+
+    soup = BeautifulSoup(html, "html.parser")
+    add_to_cart_button = soup.find("button", class_="btn-cart")
+    if add_to_cart_button:
+        return True
+
+    if "目前無現貨" in html:
+        return False
+
+    return None
+
+
+# ------------------------------------------------------------------
 # 狀態儲存
 # ------------------------------------------------------------------
 
@@ -543,9 +588,9 @@ def send_to_all_channels(message: str, subject: str = "Weverse 商品開賣通�
 
 def get_discord_webhook_for_page(page: dict) -> str:
     """依照商品頁面是哪個網站，決定要用哪一組 Discord Webhook（沒設定專屬的就用預設那組）"""
-    if page.get("site") == "muji" and DISCORD_WEBHOOK_URL_MUJI:
-        return DISCORD_WEBHOOK_URL_MUJI
-    return DISCORD_WEBHOOK_URL
+    site = page.get("site", "weverse")
+    override = SITE_DISCORD_WEBHOOKS.get(site)
+    return override if override else DISCORD_WEBHOOK_URL
 
 
 def build_status_message(page: dict, current_state: dict, newly_available: list, header: str = None) -> str:
@@ -578,6 +623,14 @@ def get_current_state_for_page(page: dict, html: str) -> dict:
         is_available = check_muji_availability(html)
         if is_available is None:
             log.warning("[%s] 找不到 MUJI 加入購物車按鈕，可能網站改版了，暫時視為不可購買", page["label"])
+            is_available = False
+        return {product_name: is_available}
+
+    if site == "5music":
+        product_name = page["products"][0]
+        is_available = check_5music_availability(html)
+        if is_available is None:
+            log.warning("[%s] 無法判斷五大唱片庫存狀態（可能網址錯誤或網站改版），暫時視為不可購買", page["label"])
             is_available = False
         return {product_name: is_available}
 
@@ -677,6 +730,13 @@ def run_test_notifications():
         sent_any = True
     else:
         log.info("未設定 DISCORD_WEBHOOK_URL_MUJI，略過 MUJI 專用頻道測試")
+
+    if DISCORD_WEBHOOK_URL_5MUSIC:
+        log.info("正在發送 Discord（五大唱片專用頻道）測試訊息...")
+        notify_discord(message, webhook_url=DISCORD_WEBHOOK_URL_5MUSIC)
+        sent_any = True
+    else:
+        log.info("未設定 DISCORD_WEBHOOK_URL_5MUSIC，略過五大唱片專用頻道測試")
 
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         log.info("正在發送 Telegram 測試訊息...")
