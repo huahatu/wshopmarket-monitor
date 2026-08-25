@@ -72,6 +72,36 @@ MONITORED_PAGES = [
         "is_single": True,
         "products": ["綠綠專"],
     },
+    {
+        "url": "https://shop.weverse.io/ko/shop/KRW/artists/255/sales/66914",
+        "label": "商品頁 66914（單一商品）",
+        "is_single": True,
+        "products": ["4顆蛋"],
+    },
+    {
+        "url": "https://shop.weverse.io/ko/shop/KRW/artists/255/sales/66910",
+        "label": "商品頁 66910（單一商品）",
+        "is_single": True,
+        "products": ["粉蛋"],
+    },
+    {
+        "url": "https://shop.weverse.io/ko/shop/KRW/artists/255/sales/66911",
+        "label": "商品頁 66911（單一商品）",
+        "is_single": True,
+        "products": ["藍蛋"],
+    },
+    {
+        "url": "https://shop.weverse.io/ko/shop/KRW/artists/255/sales/66912",
+        "label": "商品頁 66912（單一商品）",
+        "is_single": True,
+        "products": ["黃蛋"],
+    },
+    {
+        "url": "https://shop.weverse.io/ko/shop/KRW/artists/255/sales/66913",
+        "label": "商品頁 66913（單一商品）",
+        "is_single": True,
+        "products": ["白蛋"],
+    },
     # 暫時停用：MUJI 網站對雲端 IP 有防護機制，導致 GitHub Actions 抓取一直逾時失敗。
     # 如果之後想再試，把下面這段貼回 [ ] 裡就好，判斷邏輯（check_muji_availability）都還保留著。
     # {
