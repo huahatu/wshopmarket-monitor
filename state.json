@@ -73,5 +73,20 @@
   },
   "https://www.5music.com.tw/CDList-C.asp?cdno=447395678624": {
     "五大唱片 447395678624": true
+  },
+  "https://shop.weverse.io/ko/shop/KRW/artists/255/sales/66914": {
+    "4顆蛋": false
+  },
+  "https://shop.weverse.io/ko/shop/KRW/artists/255/sales/66910": {
+    "粉蛋": false
+  },
+  "https://shop.weverse.io/ko/shop/KRW/artists/255/sales/66911": {
+    "藍蛋": false
+  },
+  "https://shop.weverse.io/ko/shop/KRW/artists/255/sales/66912": {
+    "黃蛋": false
+  },
+  "https://shop.weverse.io/ko/shop/KRW/artists/255/sales/66913": {
+    "白蛋": false
   }
 }
