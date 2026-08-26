@@ -123,33 +123,33 @@ MONITORED_PAGES = [
     # },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678933",
-        "label": "五大唱片 藍蛋",
+        "label": "五大唱片 藍蛋💙",
         "site": "5music",
-        "products": ["五大唱片 藍蛋"],
+        "products": ["五大唱片 藍蛋💙"],
     },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678932",
-        "label": "五大唱片 粉蛋",
+        "label": "五大唱片 粉蛋💗",
         "site": "5music",
-        "products": ["五大唱片 粉蛋"],
+        "products": ["五大唱片 粉蛋💗"],
     },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678935",
-        "label": "五大唱片 白蛋",
+        "label": "五大唱片 白蛋🤍",
         "site": "5music",
-        "products": ["五大唱片 白蛋"],
+        "products": ["五大唱片 白蛋🤍"],
     },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678934",
-        "label": "五大唱片 黃蛋",
+        "label": "五大唱片 黃蛋💛",
         "site": "5music",
-        "products": ["五大唱片 黃蛋"],
+        "products": ["五大唱片 黃蛋💛"],
     },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678936",
-        "label": "五大唱片 4顆蛋",
+        "label": "五大唱片 4顆蛋🥚",
         "site": "5music",
-        "products": ["五大唱片 4顆蛋"],
+        "products": ["五大唱片 4顆蛋🥚"],
     },
 ]
 
@@ -236,6 +236,23 @@ def fetch_page_html(url: str, timeout: int = 30, retries: int = 2) -> str:
                 )
                 time.sleep(5)
     raise last_exception
+
+
+def extract_og_image(html: str):
+    """
+    從網頁的 <meta property="og:image" content="..."> 標籤抓取縮圖網址。
+    這跟 Discord 原本「自動展開連結」時使用的圖片來源是同一個，
+    現在改成自己在 Embed 裡帶這張圖，效果跟以前的自動連結預覽一樣。
+    找不到就回傳 None。
+    """
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        tag = soup.find("meta", property="og:image")
+        if tag and tag.get("content"):
+            return tag["content"]
+    except Exception as e:
+        log.warning("擷取 og:image 縮圖時發生例外：%s", e)
+    return None
 
 
 # ------------------------------------------------------------------
@@ -582,10 +599,11 @@ DISCORD_COLOR_STATUS = 0x3498DB    # 藍色：手動查詢目前狀態
 DISCORD_COLOR_TEST = 0x95A5A6      # 灰色：測試訊息
 
 
-def notify_discord(message: str, webhook_url: str = None, title: str = None, color: int = None) -> None:
+def notify_discord(message: str, webhook_url: str = None, title: str = None, color: int = None, image_url: str = None) -> None:
     """
     webhook_url 沒傳的話用預設頻道；title/color 有給值就會用 Embed 格式發送
     （左邊有色條、有獨立邊框的卡片樣式），沒給就退回發送純文字。
+    image_url 有給值的話，Embed 底部會附上這張圖片（例如商品縮圖）。
 
     ⚠️ 註：Discord 目前不支援整個訊息都有底色，Embed 最多只能做到左邊細長的色條，
     這是 Discord 平台本身的限制，不是程式做不到。
@@ -595,14 +613,15 @@ def notify_discord(message: str, webhook_url: str = None, title: str = None, col
         return
     try:
         if color is not None:
-            payload = {
-                "embeds": [{
-                    "title": title,
-                    "description": message,
-                    "color": color,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }]
+            embed = {
+                "title": title,
+                "description": message,
+                "color": color,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
+            if image_url:
+                embed["image"] = {"url": image_url}
+            payload = {"embeds": [embed]}
         else:
             payload = {"content": message}
 
@@ -647,13 +666,21 @@ def send_to_all_channels(
     discord_webhook_url: str = None,
     discord_title: str = None,
     discord_color: int = None,
+    discord_image_url: str = None,
 ) -> None:
     """
     discord_webhook_url：想指定用某個特定 Discord 頻道時傳入，不傳就用預設頻道。
     discord_title / discord_color：有給值的話 Discord 會用 Embed 卡片格式發送。
-    Telegram / Gmail 目前維持共用同一組設定、純文字格式（沒有分頻道、分顏色的需求）。
+    discord_image_url：想在 Embed 附上圖片（例如商品縮圖）時傳入。
+    Telegram / Gmail 目前維持共用同一組設定、純文字格式（沒有分頻道、分顏色、圖片的需求）。
     """
-    notify_discord(message, webhook_url=discord_webhook_url, title=discord_title, color=discord_color)
+    notify_discord(
+        message,
+        webhook_url=discord_webhook_url,
+        title=discord_title,
+        color=discord_color,
+        image_url=discord_image_url,
+    )
     notify_telegram(message)
     notify_gmail(subject, message)
 
@@ -747,6 +774,7 @@ def check_one_page(page: dict, all_previous_state: dict) -> dict:
             discord_webhook_url=get_discord_webhook_for_page(page),
             discord_title=f"🎉 補貨通知：{label}",
             discord_color=DISCORD_COLOR_RESTOCK,
+            discord_image_url=extract_og_image(html),
         )
 
     return current_state
@@ -788,6 +816,7 @@ def run_status_report():
             discord_webhook_url=get_discord_webhook_for_page(page),
             discord_title=f"🔍 庫存查詢：{label}",
             discord_color=DISCORD_COLOR_STATUS,
+            discord_image_url=extract_og_image(html),
         )
 
     save_state(all_new_state)
