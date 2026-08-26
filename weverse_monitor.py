@@ -14,6 +14,7 @@ import smtplib
 from email.mime.text import MIMEText
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -238,21 +239,38 @@ def fetch_page_html(url: str, timeout: int = 30, retries: int = 2) -> str:
     raise last_exception
 
 
-def extract_og_image(html: str):
+def extract_og_image(html: str, base_url: str = None):
     """
     從網頁的 <meta property="og:image" content="..."> 標籤抓取縮圖網址。
     這跟 Discord 原本「自動展開連結」時使用的圖片來源是同一個，
     現在改成自己在 Embed 裡帶這張圖，效果跟以前的自動連結預覽一樣。
-    找不到就回傳 None。
+
+    有些網站（例如五大唱片）的 og:image 內容是「相對路徑」（例如 /images/xxx.jpg），
+    不是完整網址，Discord 對圖片網址要求一定要是完整的 http(s) 網址，收到不完整的
+    網址會直接拒絕整則訊息。這裡會用 base_url（該商品頁面自己的網址）把相對路徑
+    補成完整網址；補完之後如果還是不是合法的 http(s) 網址，就直接放棄不附圖片，
+    避免因為圖片網址問題連累整則通知發不出去。
+
+    找不到、或無法組成合法網址，就回傳 None。
     """
     try:
         soup = BeautifulSoup(html, "html.parser")
         tag = soup.find("meta", property="og:image")
-        if tag and tag.get("content"):
-            return tag["content"]
+        if not tag or not tag.get("content"):
+            return None
+
+        image_url = tag["content"].strip()
+        if base_url:
+            image_url = urljoin(base_url, image_url)
+
+        if image_url.startswith("http://") or image_url.startswith("https://"):
+            return image_url
+
+        log.warning("og:image 網址格式不完整（%s），略過附加圖片", image_url)
+        return None
     except Exception as e:
         log.warning("擷取 og:image 縮圖時發生例外：%s", e)
-    return None
+        return None
 
 
 # ------------------------------------------------------------------
@@ -620,7 +638,7 @@ def notify_discord(message: str, webhook_url: str = None, title: str = None, col
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             if image_url:
-                embed["image"] = {"url": image_url}
+                embed["thumbnail"] = {"url": image_url}
             payload = {"embeds": [embed]}
         else:
             payload = {"content": message}
@@ -774,7 +792,7 @@ def check_one_page(page: dict, all_previous_state: dict) -> dict:
             discord_webhook_url=get_discord_webhook_for_page(page),
             discord_title=f"🎉 補貨通知：{label}",
             discord_color=DISCORD_COLOR_RESTOCK,
-            discord_image_url=extract_og_image(html),
+            discord_image_url=extract_og_image(html, base_url=url),
         )
 
     return current_state
@@ -816,7 +834,7 @@ def run_status_report():
             discord_webhook_url=get_discord_webhook_for_page(page),
             discord_title=f"🔍 庫存查詢：{label}",
             discord_color=DISCORD_COLOR_STATUS,
-            discord_image_url=extract_og_image(html),
+            discord_image_url=extract_og_image(html, base_url=url),
         )
 
     save_state(all_new_state)
