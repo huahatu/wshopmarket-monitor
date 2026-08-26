@@ -123,39 +123,33 @@ MONITORED_PAGES = [
     # },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678933",
-        "label": "五大唱片 藍色生日蛋💙",
+        "label": "五大唱片 藍蛋",
         "site": "5music",
-        "products": ["五大唱片 447455678933"],
+        "products": ["五大唱片 藍蛋"],
     },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678932",
-        "label": "五大唱片 粉色生日蛋💗",
+        "label": "五大唱片 粉蛋",
         "site": "5music",
-        "products": ["五大唱片 447455678932"],
+        "products": ["五大唱片 粉蛋"],
     },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678935",
-        "label": "五大唱片 白色生日蛋🤍",
+        "label": "五大唱片 白蛋",
         "site": "5music",
-        "products": ["五大唱片 447455678935"],
+        "products": ["五大唱片 白蛋"],
     },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678934",
-        "label": "五大唱片 黃色生日蛋💛",
+        "label": "五大唱片 黃蛋",
         "site": "5music",
-        "products": ["五大唱片 447455678934"],
+        "products": ["五大唱片 黃蛋"],
     },
     {
         "url": "https://www.5music.com.tw/Cdlist-C.asp?cdno=447455678936",
-        "label": "五大唱片 一盒生日蛋💙💗🤍💛",
+        "label": "五大唱片 4顆蛋",
         "site": "5music",
-        "products": ["五大唱片 447455678936"],
-    },
-    {
-        "url": "https://www.5music.com.tw/CDList-C.asp?cdno=447395678624",
-        "label": "五大唱片 防彈手燈💣",
-        "site": "5music",
-        "products": ["五大唱片 447395678624"],
+        "products": ["五大唱片 4顆蛋"],
     },
 ]
 
@@ -582,12 +576,37 @@ def save_state(state: dict) -> None:
 # 通知函式（保留錯誤 log，方便之後除錯，不再整段吞掉例外）
 # ------------------------------------------------------------------
 
-def notify_discord(message: str, webhook_url: str = None) -> None:
+# Discord Embed 色條顏色（十進位數值），依照通知類型分色，方便一眼辨識
+DISCORD_COLOR_RESTOCK = 0x2ECC71   # 綠色：偵測到補貨
+DISCORD_COLOR_STATUS = 0x3498DB    # 藍色：手動查詢目前狀態
+DISCORD_COLOR_TEST = 0x95A5A6      # 灰色：測試訊息
+
+
+def notify_discord(message: str, webhook_url: str = None, title: str = None, color: int = None) -> None:
+    """
+    webhook_url 沒傳的話用預設頻道；title/color 有給值就會用 Embed 格式發送
+    （左邊有色條、有獨立邊框的卡片樣式），沒給就退回發送純文字。
+
+    ⚠️ 註：Discord 目前不支援整個訊息都有底色，Embed 最多只能做到左邊細長的色條，
+    這是 Discord 平台本身的限制，不是程式做不到。
+    """
     url = webhook_url or DISCORD_WEBHOOK_URL
     if not url:
         return
     try:
-        resp = requests.post(url, json={"content": message}, timeout=10)
+        if color is not None:
+            payload = {
+                "embeds": [{
+                    "title": title,
+                    "description": message,
+                    "color": color,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }]
+            }
+        else:
+            payload = {"content": message}
+
+        resp = requests.post(url, json=payload, timeout=10)
         if resp.status_code >= 300:
             log.error("Discord 通知失敗：%s %s", resp.status_code, resp.text)
     except Exception as e:
@@ -622,13 +641,19 @@ def notify_gmail(subject: str, message: str) -> None:
         log.error("Gmail 通知發生例外：%s", e)
 
 
-def send_to_all_channels(message: str, subject: str = "Weverse 商品開賣通知", discord_webhook_url: str = None) -> None:
+def send_to_all_channels(
+    message: str,
+    subject: str = "Weverse 商品開賣通知",
+    discord_webhook_url: str = None,
+    discord_title: str = None,
+    discord_color: int = None,
+) -> None:
     """
-    discord_webhook_url：想指定用某個特定 Discord 頻道時傳入，
-    不傳的話就用預設的 DISCORD_WEBHOOK_URL。
-    Telegram / Gmail 目前維持共用同一組設定（沒有分頻道的需求）。
+    discord_webhook_url：想指定用某個特定 Discord 頻道時傳入，不傳就用預設頻道。
+    discord_title / discord_color：有給值的話 Discord 會用 Embed 卡片格式發送。
+    Telegram / Gmail 目前維持共用同一組設定、純文字格式（沒有分頻道、分顏色的需求）。
     """
-    notify_discord(message, webhook_url=discord_webhook_url)
+    notify_discord(message, webhook_url=discord_webhook_url, title=discord_title, color=discord_color)
     notify_telegram(message)
     notify_gmail(subject, message)
 
@@ -717,7 +742,12 @@ def check_one_page(page: dict, all_previous_state: dict) -> dict:
     elif newly_available:
         message = build_status_message(page, current_state, newly_available)
         log.info("[%s] 偵測到補貨，發送通知：%s", label, newly_available)
-        send_to_all_channels(message, discord_webhook_url=get_discord_webhook_for_page(page))
+        send_to_all_channels(
+            message,
+            discord_webhook_url=get_discord_webhook_for_page(page),
+            discord_title=f"🎉 補貨通知：{label}",
+            discord_color=DISCORD_COLOR_RESTOCK,
+        )
 
     return current_state
 
@@ -752,7 +782,13 @@ def run_status_report():
 
         message = build_status_message(page, current_state, newly_available=[], header=f"🔍 目前庫存查詢：{label}")
         log.info("[%s] 發送目前庫存狀態查詢結果", label)
-        send_to_all_channels(message, subject="Weverse 庫存狀態查詢", discord_webhook_url=get_discord_webhook_for_page(page))
+        send_to_all_channels(
+            message,
+            subject="Weverse 庫存狀態查詢",
+            discord_webhook_url=get_discord_webhook_for_page(page),
+            discord_title=f"🔍 庫存查詢：{label}",
+            discord_color=DISCORD_COLOR_STATUS,
+        )
 
     save_state(all_new_state)
 
@@ -766,21 +802,21 @@ def run_test_notifications():
     sent_any = False
     if DISCORD_WEBHOOK_URL:
         log.info("正在發送 Discord 測試訊息...")
-        notify_discord(message)
+        notify_discord(message, title="✅ 測試訊息", color=DISCORD_COLOR_TEST)
         sent_any = True
     else:
         log.info("未設定 DISCORD_WEBHOOK_URL，略過 Discord 測試")
 
     if DISCORD_WEBHOOK_URL_MUJI:
         log.info("正在發送 Discord（MUJI 專用頻道）測試訊息...")
-        notify_discord(message, webhook_url=DISCORD_WEBHOOK_URL_MUJI)
+        notify_discord(message, webhook_url=DISCORD_WEBHOOK_URL_MUJI, title="✅ 測試訊息", color=DISCORD_COLOR_TEST)
         sent_any = True
     else:
         log.info("未設定 DISCORD_WEBHOOK_URL_MUJI，略過 MUJI 專用頻道測試")
 
     if DISCORD_WEBHOOK_URL_5MUSIC:
         log.info("正在發送 Discord（五大唱片專用頻道）測試訊息...")
-        notify_discord(message, webhook_url=DISCORD_WEBHOOK_URL_5MUSIC)
+        notify_discord(message, webhook_url=DISCORD_WEBHOOK_URL_5MUSIC, title="✅ 測試訊息", color=DISCORD_COLOR_TEST)
         sent_any = True
     else:
         log.info("未設定 DISCORD_WEBHOOK_URL_5MUSIC，略過五大唱片專用頻道測試")
